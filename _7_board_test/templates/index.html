@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flask RESTful 게시판</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
+
+    <!-- Navbar -->
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <div class="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-xl font-bold text-indigo-600 cursor-pointer" onclick="resetAndLoad()">✨ 모던 게시판</h1>
+            <div id="auth-nav" class="flex items-center space-x-3">
+                <!-- 동적 렌더링 -->
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-4xl mx-auto px-4 py-6 flex-1 w-full">
+        
+        <!-- 검색 및 필터 바 -->
+        <div class="bg-white p-4 rounded-xl shadow-sm mb-6 flex flex-col md:flex-row gap-3 justify-between items-center">
+            <div class="flex gap-2 w-full md:w-auto">
+                <select id="filter-category" onchange="loadPosts(true)" class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                    <option value="전체">전체 카테고리</option>
+                    <option value="일반">일반</option>
+                    <option value="공지">공지</option>
+                    <option value="질문">질문</option>
+                </select>
+                <input type="text" id="search-input" placeholder="검색어 입력..." class="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <button onclick="loadPosts(true)" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">검색</button>
+            </div>
+            <button id="write-btn" onclick="openModal()" class="hidden bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 transition w-full md:w-auto">글쓰기</button>
+        </div>
+
+        <!-- 게시글 목록 -->
+        <div id="posts-container" class="space-y-4">
+            <!-- 동적 게시글 카드 -->
+        </div>
+
+        <!-- 더보기 버튼 (커서 페이징) -->
+        <div id="load-more-container" class="mt-6 text-center hidden">
+            <button onclick="loadMorePosts()" class="bg-white border border-gray-300 px-6 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 transition shadow-sm">더보기</button>
+        </div>
+    </main>
+
+    <!-- 로그인/회원가입 모달 -->
+    <div id="auth-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
+            <h2 id="modal-title" class="text-lg font-bold mb-4">로그인</h2>
+            <div class="space-y-3">
+                <input type="text" id="modal-username" placeholder="아이디" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500">
+                <input type="password" id="modal-password" placeholder="비밀번호" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500">
+            </div>
+            <div class="mt-6 flex justify-end space-x-2">
+                <button onclick="closeAuthModal()" class="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100">취소</button>
+                <button id="modal-submit-btn" onclick="submitAuth()" class="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white hover:bg-indigo-700">로그인</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 글작성/수정 모달 -->
+    <div id="post-modal" class="fixed inset-0 bg-black/50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-2xl p-6 w-full max-w-lg shadow-xl">
+            <h2 id="post-modal-title" class="text-lg font-bold mb-4">새 글 작성</h2>
+            <input type="hidden" id="edit-post-id">
+            <div class="space-y-3">
+                <select id="post-category" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500">
+                    <option value="일반">일반</option>
+                    <option value="공지">공지</option>
+                    <option value="질문">질문</option>
+                </select>
+                <input type="text" id="post-title" placeholder="제목을 입력하세요" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500">
+                <textarea id="post-content" rows="5" placeholder="내용을 입력하세요" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500"></textarea>
+            </div>
+            <div class="mt-6 flex justify-end space-x-2">
+                <button onclick="closePostModal()" class="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100">취소</button>
+                <button onclick="submitPost()" class="px-4 py-2 rounded-lg text-sm bg-emerald-600 text-white hover:bg-emerald-700">저장</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript 로직 -->
+    <script>
+        let currentCursor = null;
+        let isAuthModeLogin = true;
+        let currentUsername = localStorage.getItem('username');
+        let token = localStorage.getItem('token');
+
+        document.addEventListener('DOMContentLoaded', () => {
+            updateAuthUI();
+            loadPosts(true);
+        });
+
+        function updateAuthUI() {
+            const nav = document.getElementById('auth-nav');
+            const writeBtn = document.getElementById('write-btn');
+            if (token && currentUsername) {
+                nav.innerHTML = `
+                    <span class="text-sm font-medium text-gray-700">안녕하세요, <strong class="text-indigo-600">${currentUsername}</strong>님</span>
+                    <button onclick="logout()" class="text-sm text-red-500 hover:underline">로그아웃</button>
+                `;
+                writeBtn.classList.remove('hidden');
+            } else {
+                nav.innerHTML = `
+                    <button onclick="openAuthModal(true)" class="text-sm text-indigo-600 font-medium hover:underline">로그인</button>
+                    <button onclick="openAuthModal(false)" class="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">회원가입</button>
+                `;
+                writeBtn.classList.add('hidden');
+            }
+        }
+
+        async function loadPosts(reset = false) {
+            const search = document.getElementById('search-input').value;
+            const category = document.getElementById('filter-category').value;
+            
+            if (reset) {
+                currentCursor = null;
+                document.getElementById('posts-container').innerHTML = '';
+            }
+
+            let url = `/api/posts?limit=5`;
+            if (search) url += `&search=${encodeURIComponent(search)}`;
+            if (category) url += `&category=${encodeURIComponent(category)}`;
+            if (currentCursor) url += `&cursor=${currentCursor}`;
+
+            const res = await fetch(url);
+            const data = await res.json();
+
+            const container = document.getElementById('posts-container');
+            if (data.posts.length === 0 && reset) {
+                container.innerHTML = `<div class="text-center py-12 text-gray-400 bg-white rounded-xl shadow-sm">게시글이 없습니다.</div>`;
+                document.getElementById('load-more-container').classList.add('hidden');
+                return;
+            }
+
+            data.posts.forEach(post => {
+                const isOwner = currentUsername && post.author === currentUsername;
+                const div = document.createElement('div');
+                div.className = "bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition";
+                div.innerHTML = `
+                    <div class="flex justify-between items-start mb-2">
+                        <span class="text-xs font-semibold px-2.5 py-1 rounded-full ${post.category === '공지' ? 'bg-red-100 text-red-600' : 'bg-indigo-50 text-indigo-600'}">${post.category}</span>
+                        <span class="text-xs text-gray-400">작성자: ${post.author}</span>
+                    </div>
+                    <h3 class="text-lg font-bold text-gray-900 mb-1">${escapeHtml(post.title)}</h3>
+                    <p class="text-sm text-gray-600 whitespace-pre-line mb-4">${escapeHtml(post.content)}</p>
+                    ${isOwner ? `
+                        <div class="flex justify-end space-x-2">
+                            <button onclick="openEditModal(${post.id}, '${escapeAttr(post.title)}', '${escapeAttr(post.content)}', '${post.category}')" class="text-xs text-indigo-600 hover:underline">수정</button>
+                            <button onclick="deletePost(${post.id})" class="text-xs text-red-500 hover:underline">삭제</button>
+                        </div>
+                    ` : ''}
+                `;
+                container.appendChild(div);
+            });
+
+            currentCursor = data.next_cursor;
+            const loadMore = document.getElementById('load-more-container');
+            if (data.has_more) {
+                loadMore.classList.remove('hidden');
+            } else {
+                loadMore.classList.add('hidden');
+            }
+        }
+
+        function resetAndLoad() {
+            document.getElementById('search-input').value = '';
+            document.getElementById('filter-category').value = '전체';
+            loadPosts(true);
+        }
+
+        function loadMorePosts() {
+            loadPosts(false);
+        }
+
+        // 인증 모달 제어
+        function openAuthModal(isLogin) {
+            isAuthModeLogin = isLogin;
+            document.getElementById('modal-title').innerText = isLogin ? '로그인' : '회원가입';
+            document.getElementById('modal-submit-btn').innerText = isLogin ? '로그인' : '가입하기';
+            document.getElementById('auth-modal').classList.remove('hidden');
+        }
+        function closeAuthModal() {
+            document.getElementById('auth-modal').classList.add('hidden');
+        }
+
+        async function submitAuth() {
+            const username = document.getElementById('modal-username').value;
+            const password = document.getElementById('modal-password').value;
+            const endpoint = isAuthModeLogin ? '/api/auth/login' : '/api/auth/register';
+
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const data = await res.json();
+
+            if (res.ok) {
+                if (isAuthModeLogin) {
+                    token = data.access_token;
+                    currentUsername = data.username;
+                    localStorage.setItem('token', token);
+                    localStorage.setItem('username', currentUsername);
+                    updateAuthUI();
+                    closeAuthModal();
+                    loadPosts(true);
+                } else {
+                    alert('회원가입 완료! 로그인해주세요.');
+                    openAuthModal(true);
+                }
+            } else {
+                alert(data.msg || '오류가 발생했습니다.');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('username');
+            token = null;
+            currentUsername = null;
+            updateAuthUI();
+            loadPosts(true);
+        }
+
+        // 글 작성/수정 모달 제어
+        function openModal() {
+            document.getElementById('post-modal-title').innerText = '새 글 작성';
+            document.getElementById('edit-post-id').value = '';
+            document.getElementById('post-title').value = '';
+            document.getElementById('post-content').value = '';
+            document.getElementById('post-category').value = '일반';
+            document.getElementById('post-modal').classList.remove('hidden');
+        }
+        function openEditModal(id, title, content, category) {
+            document.getElementById('post-modal-title').innerText = '글 수정';
+            document.getElementById('edit-post-id').value = id;
+            document.getElementById('post-title').value = title;
+            document.getElementById('post-content').value = content;
+            document.getElementById('post-category').value = category;
+            document.getElementById('post-modal').classList.remove('hidden');
+        }
+        function closePostModal() {
+            document.getElementById('post-modal').classList.add('hidden');
+        }
+
+        async function submitPost() {
+            const id = document.getElementById('edit-post-id').value;
+            const title = document.getElementById('post-title').value;
+            const content = document.getElementById('post-content').value;
+            const category = document.getElementById('post-category').value;
+
+            const method = id ? 'PUT' : 'POST';
+            const url = id ? `/api/posts/${id}` : '/api/posts';
+
+            const res = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({title, content, category})
+            });
+
+            if (res.ok) {
+                closePostModal();
+                loadPosts(true);
+            } else {
+                alert('처리에 실패했습니다.');
+            }
+        }
+
+        async function deletePost(id) {
+            if (!confirm('정말 삭제하시겠습니까?')) return;
+
+            const res = await fetch(`/api/posts/${id}`, {
+                method: 'DELETE',
+                headers: {'Authorization': `Bearer ${token}`}
+            });
+
+            if (res.ok) {
+                loadPosts(true);
+            } else {
+                alert('삭제 권한이 없습니다.');
+            }
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/[&<>'"]/g, 
+                tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+            );
+        }
+        function escapeAttr(str) {
+            return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+    </script>
+</body>
+</html>
