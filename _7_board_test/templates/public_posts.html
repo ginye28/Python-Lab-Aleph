@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>부산 테마여행 목록</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f9f9f9; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #222; margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+        .card { border: 1px solid #ddd; border-radius: 6px; overflow: hidden; background: #fff; display: flex; flex-direction: column; transition: transform 0.2s; }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .card img { width: 100%; height: 180px; object-fit: cover; }
+        .card-body { padding: 15px; display: flex; flex-direction: column; flex-grow: 1; }
+        .card-title { font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #333; text-decoration: none; }
+        .card-title:hover { color: #007bff; }
+        .loading { text-align: center; font-size: 18px; color: #666; margin: 40px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>부산 테마여행 추천 (100선)</h1>
+        <div id="loading" class="loading">목록을 불러오는 중입니다...</div>
+        <div id="postGrid" class="grid"></div>
+    </div>
+
+    <script>
+        async function fetchPublicPosts() {
+            try {
+                const response = await fetch('/api/public/posts');
+                const data = await response.json();
+                const items = data.getRecommendedKr?.item || [];
+
+                document.getElementById('loading').style.display = 'none';
+                const gridContainer = document.getElementById('postGrid');
+
+                if (items.length === 0) {
+                    gridContainer.innerHTML = '<p>데이터가 없습니다.</p>';
+                    return;
+                }
+
+                items.forEach(item => {
+                    const card = document.createElement('div');
+                    card.className = 'card';
+
+                    const imgSrc = item.MAIN_IMG_THUMB || '';
+                    const title = item.TITLE || item.MAIN_TITLE || '제목 없음';
+                    const ucSeq = item.UC_SEQ;
+
+                    card.innerHTML = `
+                        <img src="${imgSrc}" alt="${title}" onerror="this.src='https://via.placeholder.com/300x180?text=No+Image'">
+                        <div class="card-body">
+                            <a href="/public-posts/${ucSeq}" class="card-title">${title}</a>
+                        </div>
+                    `;
+                    gridContainer.appendChild(card);
+                });
+            } catch (error) {
+                document.getElementById('loading').innerText = '데이터를 불러오는 중 오류가 발생했습니다.';
+                console.error(error);
+            }
+        }
+
+        fetchPublicPosts();
+    </script>
+</body>
+</html>
