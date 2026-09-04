@@ -1,0 +1,24 @@
+2026-09-04 14:54:25,723 [INFO] 리포트 생성 완료: C:\gov\Python-Lab-Aleph\report.md
+2026-09-04 14:54:25,776 [WARNING] 전송 실패 1/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 14:54:27,804 [WARNING] 전송 실패 2/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 14:54:31,823 [WARNING] 전송 실패 3/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 14:59:25,752 [INFO] 리포트 생성 완료: C:\gov\Python-Lab-Aleph\report.md
+2026-09-04 14:59:25,778 [WARNING] 전송 실패 1/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 14:59:27,804 [WARNING] 전송 실패 2/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 14:59:31,819 [WARNING] 전송 실패 3/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:04:24,816 [INFO] 리포트 생성 완료: C:\gov\Python-Lab-Aleph\report.md
+2026-09-04 15:04:24,829 [WARNING] 전송 실패 1/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:04:26,858 [WARNING] 전송 실패 2/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:04:30,886 [WARNING] 전송 실패 3/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:04:59,863 [INFO] 리포트 생성 완료: C:\gov\Python-Lab-Aleph\report.md
+2026-09-04 15:04:59,909 [INFO] 전송 성공 (200) {"message":"Workflow was started"}
+2026-09-04 15:09:24,733 [INFO] 리포트 생성 완료: C:\gov\Python-Lab-Aleph\report.md
+2026-09-04 15:09:24,745 [WARNING] 전송 실패 1/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:09:26,753 [WARNING] 전송 실패 2/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:09:30,771 [WARNING] 전송 실패 3/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:14:23,569 [INFO] 리포트 생성 완료: C:\gov\Python-Lab-Aleph\report.md
+2026-09-04 15:14:23,627 [INFO] 전송 성공 (200) {"message":"Workflow was started"}
+2026-09-04 15:19:24,007 [INFO] 리포트 생성 완료: C:\gov\Python-Lab-Aleph\report.md
+2026-09-04 15:19:24,029 [WARNING] 전송 실패 1/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:19:26,043 [WARNING] 전송 실패 2/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
+2026-09-04 15:19:30,064 [WARNING] 전송 실패 3/3: 404 Client Error: Not Found for url: http://localhost:5678/webhook-test/72f7eea9-6c1c-4099-832a-32ae1028a645
