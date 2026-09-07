@@ -1,0 +1,51 @@
+# 실습 환경 한 번에 띄우기 — MySQL + n8n
+# 사용법:  docker compose up -d
+# 값들은 같은 폴더의 .env 에서 읽어옵니다 (.env.example 참고)
+
+name: aleph-lab
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: aleph-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-github_db}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: aleph-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # 이 키가 자격증명(봇 토큰 등)을 암호화합니다.
+      # 자리를 옮겨도 이 값이 같아야 자격증명이 그대로 복호화됩니다.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      GENERIC_TIMEZONE: Asia/Seoul
+      TZ: Asia/Seoul
+      # http 로 접속할 때 나는 secure cookie 경고 방지
+      N8N_SECURE_COOKIE: "false"
+      # 노드 표현식에서 {{ $env.XXX }} 사용 허용
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      # 워크플로 노드가 참조할 비밀값들 — 실제 값은 .env 에 있음
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  mysql_data:
+  n8n_data:

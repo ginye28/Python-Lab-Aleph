@@ -1,0 +1,196 @@
+{
+  "name": "경보 팬아웃 (Discord / Slack / Telegram)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "72f7eea9-6c1c-4099-832a-32ae1028a645",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -32,
+        -16
+      ],
+      "id": "59be934e-740e-41c1-8c9d-38fbc16e3d2f",
+      "name": "Webhook",
+      "webhookId": "ed9b49fc-74c9-4043-b631-1e32c0121bd2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1a50a29b-437a-4500-a261-f5863615e218",
+              "name": "result",
+              "value": "={{ $json.ip }} → {{ $json.severity }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        416,
+        -16
+      ],
+      "id": "1ef57c80-3f68-4f84-b9a6-f4caa9532d13",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.result }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        640,
+        -208
+      ],
+      "id": "a5b5ab60-f2b9-4608-b0a5-757899da53ac",
+      "name": "디스코드"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.result }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        640,
+        -16
+      ],
+      "id": "6f836051-0351-47d7-b123-ba888cb084b4",
+      "name": "슬랙"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $env.TELEGRAM_CHAT_ID }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.result }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        640,
+        176
+      ],
+      "id": "4116aca3-a1bf-4806-88b1-bd1c17d3bfec",
+      "name": "텔레그램"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 웹훅으로 들어온 경보에 심각도(severity)를 매겨 다음 노드로 넘긴다.\n// Webhook 노드의 출력은 { headers, params, query, body } 형태이므로 body 를 꺼내 평탄화한다.\n// 등급 기준은 detect.py 와 동일하게 맞춘다.\n\nfunction severityOf(level) {\n  if (level >= 10) return 'High';\n  if (level >= 7)  return 'Medium';\n  return 'Low';\n}\n\nfor (const item of $input.all()) {\n  const src = item.json.body ?? item.json;   // 웹훅이면 body 안에, 직접 호출이면 그대로\n  const level = Number(src.level ?? 0);\n\n  item.json = {\n    ...src,\n    level,\n    severity: severityOf(level),\n  };\n}\n\nreturn $input.all();\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        192,
+        -16
+      ],
+      "id": "52110a02-8920-41bf-a3dd-cdcf5711756f",
+      "name": "심각도 판정"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "심각도 판정",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "슬랙",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "디스코드",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "텔레그램",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "슬랙": {
+      "main": [
+        []
+      ]
+    },
+    "심각도 판정": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "4381896c-eb94-4354-ab6b-f4e7e2cd81b6",
+  "meta": {
+    "instanceId": "83585ad7ab0b8a9aa70490b0c8a9307750d9aa2bca20dde6bbf8bc8863676db1"
+  },
+  "nodeGroups": [],
+  "id": "B5JpVxu5lDgwC8Z6",
+  "tags": []
+}

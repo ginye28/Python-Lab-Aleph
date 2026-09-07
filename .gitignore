@@ -1,1 +1,5 @@
 .env
+creds.json
+*.creds.json
+*.log
+log.txt

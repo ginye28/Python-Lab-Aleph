@@ -3,14 +3,29 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
-import requests 
+import os
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()   # 상위 폴더의 .env 를 환경변수로 올린다
 
 app = Flask(__name__)
 
-# 스키마 및 설정
-app.config['SQLALCHEMY_DATABASE_URI'] = 'mysql+pymysql://root:123456@localhost:3306/my_new_board_db'
+# ── DB 접속 정보 ──────────────────────────────────────
+# 값은 .env 에서 읽고, 없으면 docker-compose 의 기본값과 동일하게 동작한다.
+# host 는 127.0.0.1 로 고정한다. Windows 에서 localhost 는 IPv6(::1) 로 먼저
+# 해석돼 도커 포트포워딩과 어긋나는 경우가 있다.
+DB_USER = os.environ.get("MYSQL_USER", "root")
+DB_PASSWORD = os.environ.get("MYSQL_ROOT_PASSWORD", "123456")
+DB_HOST = os.environ.get("MYSQL_HOST", "127.0.0.1")
+DB_PORT = os.environ.get("MYSQL_PORT", "3306")
+DB_NAME = os.environ.get("MYSQL_DATABASE", "github_db")
+
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = 'super-secret-key-change-this'
+app.config['JWT_SECRET_KEY'] = os.environ.get("JWT_SECRET_KEY", "dev-only-change-me")
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=2)
 
 db = SQLAlchemy(app)
@@ -184,11 +199,19 @@ def delete_post(id):
 # ----------------- 공공 데이터 연동 설정 (부산테마여행) -----------------
 
 import os
+from urllib.parse import unquote
 from dotenv import load_dotenv
 
 load_dotenv()   # 같은 폴더의 .env 를 읽어 환경변수로 올려 준다 (이 한 줄이 핵심)
 
 PUBLIC_API_KEY = os.environ.get("PUBLIC_API_KEY")
+
+# 공공데이터포털은 Encoding 키와 Decoding 키 두 가지를 발급한다.
+# requests 가 params 를 다시 URL 인코딩하므로, Encoding 키를 그대로 넘기면
+# %2B -> %252B 처럼 이중 인코딩되어 SERVICE KEY IS NOT REGISTERED ERROR 가 난다.
+# 여기서 한 번 풀어두면 어느 쪽 키를 넣어도 정상 동작한다.
+if PUBLIC_API_KEY:
+    PUBLIC_API_KEY = unquote(PUBLIC_API_KEY)
 
 # 키 값 자체는 절대 출력하지 않는다
 if PUBLIC_API_KEY:
