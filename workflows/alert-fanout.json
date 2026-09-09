@@ -10,10 +10,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [
-        -32,
-        -16
+        -672,
+        192
       ],
-      "id": "59be934e-740e-41c1-8c9d-38fbc16e3d2f",
+      "id": "cee0a962-6b89-4f66-9311-ed3f4b57c028",
       "name": "Webhook",
       "webhookId": "ed9b49fc-74c9-4043-b631-1e32c0121bd2"
     },
@@ -34,16 +34,16 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        416,
-        -16
+        -224,
+        192
       ],
-      "id": "1ef57c80-3f68-4f84-b9a6-f4caa9532d13",
+      "id": "1586f5ae-9530-4450-b736-755194db09db",
       "name": "Edit Fields"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "url": "={{  $env.DISCORD_WEBHOOK_URL }}",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
@@ -58,10 +58,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        640,
-        -208
+        0,
+        0
       ],
-      "id": "a5b5ab60-f2b9-4608-b0a5-757899da53ac",
+      "id": "8d02c881-c78e-4615-b7ca-0778fbc9a643",
       "name": "디스코드"
     },
     {
@@ -82,22 +82,22 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        640,
-        -16
+        0,
+        192
       ],
-      "id": "6f836051-0351-47d7-b123-ba888cb084b4",
+      "id": "27876700-e153-4daa-a094-811c83639723",
       "name": "슬랙"
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "url": "=https://api.telegram.org/bot{{  $env.TELEGRAM_BOT_TOKEN }}/sendMessage ",
         "sendBody": true,
         "bodyParameters": {
           "parameters": [
             {
               "name": "chat_id",
-              "value": "={{ $env.TELEGRAM_CHAT_ID }}"
+              "value": "={{  $env.TELEGRAM_CHAT_ID }}"
             },
             {
               "name": "text",
@@ -110,10 +110,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        640,
-        176
+        0,
+        384
       ],
-      "id": "4116aca3-a1bf-4806-88b1-bd1c17d3bfec",
+      "id": "30d33a8b-4d0d-4720-96f4-2965fadc4a8f",
       "name": "텔레그램"
     },
     {
@@ -123,14 +123,13 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        192,
-        -16
+        -448,
+        192
       ],
-      "id": "52110a02-8920-41bf-a3dd-cdcf5711756f",
+      "id": "93e3570e-127f-4675-87c4-39235d56b634",
       "name": "심각도 판정"
     }
   ],
-  "pinData": {},
   "connections": {
     "Webhook": {
       "main": [
@@ -164,11 +163,6 @@
         ]
       ]
     },
-    "슬랙": {
-      "main": [
-        []
-      ]
-    },
     "심각도 판정": {
       "main": [
         [
@@ -181,16 +175,8 @@
       ]
     }
   },
-  "active": true,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate"
-  },
-  "versionId": "4381896c-eb94-4354-ab6b-f4e7e2cd81b6",
-  "meta": {
-    "instanceId": "83585ad7ab0b8a9aa70490b0c8a9307750d9aa2bca20dde6bbf8bc8863676db1"
-  },
-  "nodeGroups": [],
-  "id": "B5JpVxu5lDgwC8Z6",
-  "tags": []
+  }
 }

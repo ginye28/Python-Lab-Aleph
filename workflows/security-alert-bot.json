@@ -1,0 +1,349 @@
+{
+  "name": "실습과제 - 경보 자동화 봇",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "security-events",
+        "options": {}
+      },
+      "id": "9a76d266-112c-4aca-a65a-3764cf821e85",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1104,
+        224
+      ],
+      "webhookId": "bc3f872c-78a9-4358-a4c0-991644b57f08"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 과제 2 판정 로직\n//\n// [!] 언어 선택 함정: 이 Code 노드에서 언어를 \"Python (Beta)\" 로 바꾸면\n//   - $json / $input 대신 밑줄이 붙은 _json / _input 을 써야 하고\n//   - requests 같은 일반 파이썬 라이브러리가 거의 없는 Pyodide(WASM) 환경이라\n//   이 코드를 그대로 붙여넣으면 NameError 로 바로 죽는다.\n//   실습과제 B4 채점 항목이니, 일부러 Python 으로 한번 돌려서 에러를 캡처해두고\n//   원인을 확인한 뒤 여기 JavaScript 로 완성하는 것을 권장한다.\n\nconst DENY_LEVEL = 10;  // 거부 기준 상수 — 이 숫자만 바꾸면 판정이 바뀐다 (B3)\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  // Webhook 노드의 출력은 { headers, params, query, body } 형태다.\n  const src = item.json.body ?? item.json;\n  const student = src.student ?? 'unknown';\n  const alerts = src.alerts ?? [];\n\n  for (const a of alerts) {\n    const level = Number(a.level ?? 0);\n    let severity, decision;\n    if (level >= DENY_LEVEL) {\n      severity = 'High';\n      decision = 'deny';\n    } else if (level >= 7) {\n      severity = 'Medium';\n      decision = 'allow';\n    } else {\n      severity = 'Low';\n      decision = 'allow';\n    }\n\n    results.push({\n      json: {\n        student,\n        src_ip: a.ip,\n        level,\n        rule: a.rule,\n        fail_count: a.fail_count ?? 1,\n        severity,\n        decision,\n        reason: `level ${level} (rule ${a.rule}) \\u2192 ${decision}`,\n      },\n    });\n  }\n}\n\nreturn results;\n",
+        "language": "javaScript"
+      },
+      "id": "4b82ff17-be3e-4a9d-8bfa-8586c45553e6",
+      "name": "판정",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -864,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "4c5f9f9a-6574-41bf-9f27-b9aa1d3d06a9",
+              "leftValue": "={{ $json.decision }}",
+              "rightValue": "deny",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "50bdf366-b38f-4db7-92c4-3817948cf294",
+      "name": "거부인가?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -624,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4384d62f-6e55-4c89-8b7a-f463a4eda111",
+              "name": "message",
+              "value": "=🚫 [거부] {{ $json.src_ip }} — {{ $json.reason }} (severity: {{ $json.severity }}, student: {{ $json.student }})",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "b8209f94-8521-45ea-8579-2fdc5f83723d",
+      "name": "메시지 🚫 거부",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -368,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "239054d6-4bc7-4fd6-b68d-7b11cfadc0c7",
+              "name": "message",
+              "value": "=✅ [허용] {{ $json.src_ip }} (student: {{ $json.student }})",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "5036bfab-e492-4031-bd28-fb51515bc1f7",
+      "name": "메시지 ✅ 허용",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -368,
+        352
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "96201eeb-f48f-4f04-8b33-277792ec3818",
+      "name": "슬랙",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -80,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c9f6c6a3-58e3-4151-83cc-f4fdbbc1b2b4",
+      "name": "디스코드",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -80,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $env.TELEGRAM_CHAT_ID }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.message.replace(/([0-9]{1,3})[.]([0-9]{1,3})[.]([0-9]{1,3})[.]([0-9]{1,3})/g, '$1[.]$2[.]$3[.]$4') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2977a9cc-479d-4d01-9937-12d7a2d98851",
+      "name": "텔레그램",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -80,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5000/api/security/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.SECURITY_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "student",
+              "value": "={{ $json.student }}"
+            },
+            {
+              "name": "src_ip",
+              "value": "={{ $json.src_ip }}"
+            },
+            {
+              "name": "decision",
+              "value": "={{ $json.decision }}"
+            },
+            {
+              "name": "severity",
+              "value": "={{ $json.severity }}"
+            },
+            {
+              "name": "reason",
+              "value": "={{ $json.reason }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "0e6ca758-c941-40bd-8337-03fad38f2f35",
+      "name": "게시판 저장",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -80,
+        416
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "판정",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "판정": {
+      "main": [
+        [
+          {
+            "node": "거부인가?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "거부인가?": {
+      "main": [
+        [
+          {
+            "node": "메시지 🚫 거부",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "메시지 ✅ 허용",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "메시지 🚫 거부": {
+      "main": [
+        [
+          {
+            "node": "슬랙",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "디스코드",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "텔레그램",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "게시판 저장",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "메시지 ✅ 허용": {
+      "main": [
+        [
+          {
+            "node": "슬랙",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "디스코드",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "텔레그램",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "게시판 저장",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}

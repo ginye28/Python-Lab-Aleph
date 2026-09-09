@@ -16,7 +16,7 @@ app = Flask(__name__)
 # host 는 127.0.0.1 로 고정한다. Windows 에서 localhost 는 IPv6(::1) 로 먼저
 # 해석돼 도커 포트포워딩과 어긋나는 경우가 있다.
 DB_USER = os.environ.get("MYSQL_USER", "root")
-DB_PASSWORD = os.environ.get("MYSQL_ROOT_PASSWORD", "123456")
+DB_PASSWORD = os.environ.get("MYSQL_ROOT_PASSWORD", "")  # 기본값 없음 - .env 에서만 읽는다
 DB_HOST = os.environ.get("MYSQL_HOST", "127.0.0.1")
 DB_PORT = os.environ.get("MYSQL_PORT", "3306")
 DB_NAME = os.environ.get("MYSQL_DATABASE", "github_db")
@@ -27,6 +27,9 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.environ.get("JWT_SECRET_KEY", "dev-only-change-me")
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=2)
+
+# 실습과제: 게시판 REST API 를 호출할 때 쓰는 키. 소스에 직접 쓰지 않고 .env 에서 읽는다.
+SECURITY_API_KEY = os.environ.get("SECURITY_API_KEY", "dev-only-change-me")
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -46,6 +49,27 @@ class Post(db.Model):
     category = db.Column(db.String(50), nullable=False, default='일반')
     author_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     author = db.relationship('User', backref=db.backref('posts', lazy=True))
+
+class SecurityEvent(db.Model):
+    __tablename__ = 'security_events'
+    id = db.Column(db.Integer, primary_key=True)
+    student = db.Column(db.String(80), nullable=False)
+    src_ip = db.Column(db.String(45), nullable=False)
+    decision = db.Column(db.String(10), nullable=False)   # 'allow' | 'deny'
+    severity = db.Column(db.String(10))                   # 'Low' | 'Medium' | 'High'
+    reason = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "student": self.student,
+            "src_ip": self.src_ip,
+            "decision": self.decision,
+            "severity": self.severity,
+            "reason": self.reason,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 with app.app_context():
     db.create_all()
@@ -194,6 +218,51 @@ def delete_post(id):
     db.session.delete(post)
     db.session.commit()
     return jsonify({"msg": "게시글이 삭제되었습니다."}), 200
+
+
+# ----------------- Security Events (실습과제: 경보 자동화 봇) -----------------
+@app.route('/api/security/events', methods=['POST'])
+def create_security_event():
+    # n8n 이 호출하는 엔드포인트. 헤더의 API 키로 인증한다 (JWT 로그인과는 별개).
+    if request.headers.get('X-API-Key') != SECURITY_API_KEY:
+        return jsonify({"msg": "인증 실패: X-API-Key 가 없거나 올바르지 않습니다."}), 401
+
+    data = request.get_json(silent=True) or {}
+    student = data.get('student')
+    src_ip = data.get('src_ip')
+    decision = data.get('decision')
+
+    if not student or not src_ip or not decision:
+        return jsonify({"msg": "student, src_ip, decision 은 필수입니다."}), 400
+
+    event = SecurityEvent(
+        student=student,
+        src_ip=src_ip,
+        decision=decision,
+        severity=data.get('severity'),
+        reason=data.get('reason'),
+    )
+    db.session.add(event)
+    db.session.commit()
+
+    return jsonify(event.to_dict()), 201
+
+
+@app.route('/api/security/events', methods=['GET'])
+def list_security_events():
+    # 인증 없이 본인 기록만 조회 (student 파라미터 기준)
+    student = request.args.get('student')
+    query = SecurityEvent.query
+    if student:
+        query = query.filter_by(student=student)
+    events = query.order_by(SecurityEvent.created_at.desc()).all()
+    return jsonify([e.to_dict() for e in events])
+
+
+@app.route('/security')
+def security_dashboard():
+    # 보안 이벤트 대시보드 화면 (데이터는 위의 GET /api/security/events 로 가져간다)
+    return render_template('security.html')
 
 
 # ----------------- 공공 데이터 연동 설정 (부산테마여행) -----------------

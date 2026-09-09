@@ -10,7 +10,7 @@ services:
     container_name: aleph-mysql
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?.env 에 MYSQL_ROOT_PASSWORD 를 설정하세요}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-github_db}
     ports:
       - "3306:3306"
@@ -43,6 +43,7 @@ services:
       SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SECURITY_API_KEY: ${SECURITY_API_KEY:-}
     volumes:
       - n8n_data:/home/node/.n8n
 

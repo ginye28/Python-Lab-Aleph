@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>보안 이벤트 대시보드</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
+
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <nav style="padding: 10px; background: #f8f9fa;">
+            <a href="/" style="margin-right: 15px; text-decoration: none; font-weight: bold;">홈(게시판)</a>
+            <a href="/public-posts" style="margin-right: 15px; text-decoration: none; color: #007bff; font-weight: bold;">부산 테마여행 목록 (100건)</a>
+            <a href="/security" style="text-decoration: none; color: #dc2626; font-weight: bold;">보안 이벤트 대시보드</a>
+        </nav>
+        <div class="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-xl font-bold text-indigo-600">🛡️ 로그인 경보 대시보드</h1>
+            <div class="flex gap-2 items-center">
+                <input type="text" id="student" placeholder="student (비우면 전체)"
+                    class="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <button onclick="load()"
+                    class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition">조회</button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-6xl mx-auto px-4 py-6 flex-1 w-full">
+
+        <!-- 요약 카드 -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white p-4 rounded-xl shadow-sm">
+                <p class="text-xs text-gray-500 mb-1">전체 이벤트</p>
+                <p id="c-total" class="text-2xl font-bold text-gray-800">-</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500">
+                <p class="text-xs text-gray-500 mb-1">🚫 거부 (deny)</p>
+                <p id="c-deny" class="text-2xl font-bold text-red-600">-</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-emerald-500">
+                <p class="text-xs text-gray-500 mb-1">✅ 허용 (allow)</p>
+                <p id="c-allow" class="text-2xl font-bold text-emerald-600">-</p>
+            </div>
+            <div class="bg-white p-4 rounded-xl shadow-sm">
+                <p class="text-xs text-gray-500 mb-1">거부 상위 IP</p>
+                <p id="c-topip" class="text-sm font-bold text-gray-800 break-all">-</p>
+            </div>
+        </div>
+
+        <!-- 이벤트 표 -->
+        <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-100 text-gray-600">
+                        <tr>
+                            <th class="text-left px-4 py-3 font-semibold">#</th>
+                            <th class="text-left px-4 py-3 font-semibold">시각</th>
+                            <th class="text-left px-4 py-3 font-semibold">student</th>
+                            <th class="text-left px-4 py-3 font-semibold">출발 IP</th>
+                            <th class="text-left px-4 py-3 font-semibold">판정</th>
+                            <th class="text-left px-4 py-3 font-semibold">심각도</th>
+                            <th class="text-left px-4 py-3 font-semibold">근거</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rows" class="divide-y divide-gray-100">
+                        <tr>
+                            <td colspan="7" class="px-4 py-10 text-center text-gray-400">불러오는 중...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <p class="text-xs text-gray-400 mt-4">
+            n8n 워크플로의 <code>게시판 저장</code> 노드가
+            <code>POST /api/security/events</code> 로 기록한 내용입니다.
+        </p>
+    </main>
+
+    <script>
+        function badge(text, cls) {
+            return '<span class="px-2 py-1 rounded-full text-xs font-semibold ' + cls + '">' + text + '</span>';
+        }
+
+        async function load() {
+            const student = document.getElementById('student').value.trim();
+            const url = '/api/security/events' + (student ? '?student=' + encodeURIComponent(student) : '');
+            const rows = document.getElementById('rows');
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+
+                const deny = data.filter(e => e.decision === 'deny');
+                const allow = data.filter(e => e.decision === 'allow');
+                document.getElementById('c-total').textContent = data.length;
+                document.getElementById('c-deny').textContent = deny.length;
+                document.getElementById('c-allow').textContent = allow.length;
+
+                const tally = {};
+                deny.forEach(e => { tally[e.src_ip] = (tally[e.src_ip] || 0) + 1; });
+                const top = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+                document.getElementById('c-topip').textContent = top ? top[0] + ' (' + top[1] + '건)' : '-';
+
+                if (!data.length) {
+                    rows.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-gray-400">기록이 없습니다.</td></tr>';
+                    return;
+                }
+
+                rows.innerHTML = data.map(e => {
+                    const d = e.decision === 'deny'
+                        ? badge('🚫 거부', 'bg-red-100 text-red-700')
+                        : badge('✅ 허용', 'bg-emerald-100 text-emerald-700');
+                    const sevCls = e.severity === 'High' ? 'bg-red-100 text-red-700'
+                        : e.severity === 'Medium' ? 'bg-amber-100 text-amber-700'
+                            : 'bg-gray-100 text-gray-600';
+                    const t = e.created_at ? e.created_at.replace('T', ' ') : '-';
+                    return '<tr class="hover:bg-gray-50">'
+                        + '<td class="px-4 py-3 text-gray-400">' + e.id + '</td>'
+                        + '<td class="px-4 py-3 whitespace-nowrap text-gray-600">' + t + '</td>'
+                        + '<td class="px-4 py-3 font-medium">' + e.student + '</td>'
+                        + '<td class="px-4 py-3 font-mono">' + e.src_ip + '</td>'
+                        + '<td class="px-4 py-3">' + d + '</td>'
+                        + '<td class="px-4 py-3">' + badge(e.severity || '-', sevCls) + '</td>'
+                        + '<td class="px-4 py-3 text-gray-600">' + (e.reason || '') + '</td>'
+                        + '</tr>';
+                }).join('');
+            } catch (err) {
+                rows.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-red-500">불러오지 못했습니다: ' + err + '</td></tr>';
+            }
+        }
+
+        load();
+    </script>
+</body>
+
+</html>
