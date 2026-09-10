@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <title>부산 테마여행 상세 정보</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f9f9f9;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        nav a {
+            text-decoration: none;
+            color: #007bff;
+            font-weight: bold;
+        }
+
+        h1 {
+            margin-top: 15px;
+            color: #222;
+        }
+
+        .image-container {
+            display: flex;
+            gap: 20px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .image-box {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .image-box img {
+            width: 100%;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+
+        .image-box p {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #555;
+        }
+
+        .content-box {
+            line-height: 1.6;
+            color: #444;
+            margin-top: 20px;
+            white-space: pre-line;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container" class="container">
+        <nav>
+            <a href="/public-posts">← 목록으로 돌아가기</a>
+        </nav>
+
+        <div id="loading">상세 정보를 불러오는 중입니다...</div>
+
+        <div id="detailContainer" style="display: none;">
+            <h1 id="postTitle"></h1>
+
+            <div class="image-container">
+                <div class="image-box">
+                    <p>썸네일 사진 (MAIN_IMG_THUMB)</p>
+                    <img id="thumbImg" src="" alt="썸네일 이미지">
+                </div>
+                <div class="image-box">
+                    <p>원본 사진 (MAIN_IMG_NORMAL)</p>
+                    <img id="normalImg" src="" alt="원본 이미지">
+                </div>
+            </div>
+
+            <hr style="border: 0; border-top: 1px solid #eee;">
+
+            <div class="content-box" id="postContent"></div>
+        </div>
+    </div>
+
+    <script>
+        const pathSegments = window.location.pathname.split('/');
+        const currentUcSeq = Number(pathSegments[pathSegments.length - 1]);
+
+        async function fetchDetailData() {
+            try {
+                const response = await fetch('/api/public/posts');
+                const data = await response.json();
+
+                // 데이터 구조 확인용 콘솔 출력
+                console.log("받아온 전체 데이터:", data);
+
+                // 공공데이터 구조에 맞춰 안전하게 아이템 추출
+                const items = data.getRecommendedKr?.item || data.item || [];
+
+                console.log("추출된 아이템 목록:", items);
+                console.log("찾을 UC_SEQ:", currentUcSeq);
+
+                const targetItem = items.find(item => Number(item.UC_SEQ) === currentUcSeq);
+
+                document.getElementById('loading').style.display = 'none';
+
+                if (!targetItem) {
+                    document.getElementById('container').innerHTML = '<h2>해당 데이터를 찾을 수 없습니다.</h2>';
+                    return;
+                }
+
+                document.getElementById('postTitle').innerText = targetItem.TITLE || targetItem.MAIN_TITLE || '제목 없음';
+                document.getElementById('thumbImg').src = targetItem.MAIN_IMG_THUMB || '';
+                document.getElementById('normalImg').src = targetItem.MAIN_IMG_NORMAL || '';
+
+                const rawContent = targetItem.ITEMCNTNTS || '상세 설명이 없습니다.';
+                document.getElementById('postContent').innerHTML = rawContent;
+
+                document.getElementById('detailContainer').style.display = 'block';
+            } catch (error) {
+                document.getElementById('loading').innerText = '상세 데이터를 불러오는 중 오류가 발생했습니다.';
+                console.error(error);
+            }
+        }
+
+        fetchDetailData();
+    </script>
+</body>
+
+</html>

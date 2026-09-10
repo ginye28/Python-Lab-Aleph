@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>골드 라운지 - 카페이야기</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
+
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <nav style="padding: 10px; background: #f8f9fa; margin-bottom: 20px;">
+            <a href="/" style="margin-right: 15px; text-decoration: none; font-weight: bold;">홈(게시판)</a>
+            <a href="/gold" style="margin-right: 15px; text-decoration: none; color: #b8860b; font-weight: bold;">🥇 골드 라운지</a>
+            <a href="/admin" style="text-decoration: none; color: #dc2626; font-weight: bold;">🛠 관리자 페이지</a>
+        </nav>
+        <div class="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
+            <a href="/" class="text-xl font-bold text-indigo-600">☕ 카페이야기</a>
+            <div id="auth-nav" class="flex items-center space-x-3 text-sm text-gray-500">불러오는 중...</div>
+        </div>
+    </header>
+
+    <main class="max-w-4xl mx-auto px-4 py-10 flex-1 w-full">
+        <h2 class="text-lg font-bold text-gray-700 mb-4">🥇 골드 라운지 (요구 등급: 골드[1] 이상)</h2>
+        <div id="content-area">
+            <!-- 접근 결과에 따라 동적으로 채워진다 -->
+        </div>
+    </main>
+
+    <script>
+        const ROLE_BADGE = {
+            0: { name: '일반', cls: 'bg-gray-100 text-gray-600' },
+            1: { name: '골드', cls: 'bg-amber-100 text-amber-700' },
+            2: { name: '관리자', cls: 'bg-red-100 text-red-600' },
+        };
+
+        function renderAuthNav(username, role) {
+            const nav = document.getElementById('auth-nav');
+            if (!username) {
+                nav.innerHTML = `
+                    <a href="/" class="text-sm text-indigo-600 font-medium hover:underline">로그인하러 가기</a>
+                `;
+                return;
+            }
+            const badge = ROLE_BADGE[role] || { name: '알수없음', cls: 'bg-gray-100 text-gray-500' };
+            nav.innerHTML = `
+                <span class="text-sm font-medium text-gray-700">${username}님</span>
+                <span class="text-xs font-semibold px-2 py-1 rounded-full ${badge.cls}">${badge.name} · ${role}</span>
+                <a href="/" class="text-sm text-gray-500 hover:underline">홈으로</a>
+            `;
+        }
+
+        function renderDenied(reasonMsg, currentRoleName, currentRole, requiredRoleName, requiredRole) {
+            document.getElementById('content-area').innerHTML = `
+                <div class="bg-white border-2 border-red-200 rounded-xl p-8 text-center">
+                    <div class="text-4xl mb-3">⛔</div>
+                    <p class="text-lg font-bold text-red-600 mb-2">접근 권한이 없습니다</p>
+                    <p class="text-sm text-gray-600 mb-4">${reasonMsg}</p>
+                    <div class="inline-flex gap-4 text-sm bg-red-50 px-4 py-2 rounded-lg">
+                        <span>현재 등급: <strong>${currentRoleName ?? '비로그인'} ${currentRole !== undefined ? '(' + currentRole + ')' : ''}</strong></span>
+                        <span>필요 등급: <strong>${requiredRoleName} (${requiredRole})</strong> 이상</span>
+                    </div>
+                    <div class="mt-6">
+                        <a href="/" class="text-indigo-600 text-sm font-medium hover:underline">홈으로 돌아가기</a>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSuccess(data) {
+            document.getElementById('content-area').innerHTML = `
+                <div class="bg-white border-2 border-amber-200 rounded-xl p-8 text-center">
+                    <div class="text-4xl mb-3">🥇</div>
+                    <p class="text-lg font-bold text-amber-700 mb-2">골드 라운지에 오신 것을 환영합니다</p>
+                    <p class="text-sm text-gray-600">${data.msg}</p>
+                    <p class="text-xs text-gray-400 mt-4">서버(DB)가 실제로 확인해 준 등급: ${data.role_name} (${data.role})</p>
+                </div>
+            `;
+        }
+
+        async function main() {
+            const token = localStorage.getItem('token');
+            const username = localStorage.getItem('username');
+            const role = localStorage.getItem('role') !== null ? Number(localStorage.getItem('role')) : undefined;
+            renderAuthNav(username, role);
+
+            if (!token) {
+                renderDenied('로그인이 필요합니다.', null, undefined, '골드', 1);
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/access/gold', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    renderSuccess(data);
+                } else if (res.status === 403) {
+                    renderDenied(data.msg, data.current_role_name, data.current_role, data.required_role_name, data.required_role);
+                } else {
+                    renderDenied('로그인이 만료되었거나 유효하지 않습니다. 다시 로그인해주세요.', null, undefined, '골드', 1);
+                }
+            } catch (e) {
+                renderDenied('서버와 통신 중 오류가 발생했습니다.', null, undefined, '골드', 1);
+            }
+        }
+
+        main();
+    </script>
+</body>
+
+</html>

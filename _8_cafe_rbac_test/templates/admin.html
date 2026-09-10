@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>관리자 페이지 - 카페이야기</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
+
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <nav style="padding: 10px; background: #f8f9fa; margin-bottom: 20px;">
+            <a href="/" style="margin-right: 15px; text-decoration: none; font-weight: bold;">홈(게시판)</a>
+            <a href="/gold" style="margin-right: 15px; text-decoration: none; color: #b8860b; font-weight: bold;">🥇 골드 라운지</a>
+            <a href="/admin" style="text-decoration: none; color: #dc2626; font-weight: bold;">🛠 관리자 페이지</a>
+        </nav>
+        <div class="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
+            <a href="/" class="text-xl font-bold text-indigo-600">☕ 카페이야기</a>
+            <div id="auth-nav" class="flex items-center space-x-3 text-sm text-gray-500">불러오는 중...</div>
+        </div>
+    </header>
+
+    <main class="max-w-4xl mx-auto px-4 py-10 flex-1 w-full">
+        <h2 class="text-lg font-bold text-gray-700 mb-1">🛠 관리자 페이지 (요구 등급: 관리자[2])</h2>
+        <p class="text-xs text-gray-400 mb-4">등급표 — 일반: 0 · 골드: 1 · 관리자: 2</p>
+        <div id="content-area">
+            <!-- 접근 결과에 따라 동적으로 채워진다 -->
+        </div>
+    </main>
+
+    <script>
+        const ROLE_BADGE = {
+            0: { name: '일반', cls: 'bg-gray-100 text-gray-600' },
+            1: { name: '골드', cls: 'bg-amber-100 text-amber-700' },
+            2: { name: '관리자', cls: 'bg-red-100 text-red-600' },
+        };
+
+        function renderAuthNav(username, role) {
+            const nav = document.getElementById('auth-nav');
+            if (!username) {
+                nav.innerHTML = `<a href="/" class="text-sm text-indigo-600 font-medium hover:underline">로그인하러 가기</a>`;
+                return;
+            }
+            const badge = ROLE_BADGE[role] || { name: '알수없음', cls: 'bg-gray-100 text-gray-500' };
+            nav.innerHTML = `
+                <span class="text-sm font-medium text-gray-700">${username}님</span>
+                <span class="text-xs font-semibold px-2 py-1 rounded-full ${badge.cls}">${badge.name} · ${role}</span>
+                <a href="/" class="text-sm text-gray-500 hover:underline">홈으로</a>
+            `;
+        }
+
+        function renderDenied(reasonMsg, currentRoleName, currentRole, requiredRoleName, requiredRole) {
+            document.getElementById('content-area').innerHTML = `
+                <div class="bg-white border-2 border-red-200 rounded-xl p-8 text-center">
+                    <div class="text-4xl mb-3">⛔</div>
+                    <p class="text-lg font-bold text-red-600 mb-2">접근 권한이 없습니다</p>
+                    <p class="text-sm text-gray-600 mb-4">${reasonMsg}</p>
+                    <div class="inline-flex gap-4 text-sm bg-red-50 px-4 py-2 rounded-lg">
+                        <span>현재 등급: <strong>${currentRoleName ?? '비로그인'} ${currentRole !== undefined ? '(' + currentRole + ')' : ''}</strong></span>
+                        <span>필요 등급: <strong>${requiredRoleName} (${requiredRole})</strong></span>
+                    </div>
+                    <div class="mt-6">
+                        <a href="/" class="text-indigo-600 text-sm font-medium hover:underline">홈으로 돌아가기</a>
+                    </div>
+                </div>
+            `;
+        }
+
+        let myUserId = null;
+
+        async function renderUserTable() {
+            const token = localStorage.getItem('token');
+            const res = await fetch('/api/admin/users', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const users = await res.json();
+
+            const rows = users.map(u => `
+                <tr class="border-b last:border-0" data-id="${u.id}">
+                    <td class="px-3 py-2 text-gray-400">${u.id}</td>
+                    <td class="px-3 py-2 font-medium">${escapeHtml(u.username)}${u.id === myUserId ? ' <span class="text-xs text-indigo-500">(나)</span>' : ''}</td>
+                    <td class="px-3 py-2">
+                        <select class="role-select border border-gray-300 rounded px-2 py-1 text-sm" ${u.id === myUserId ? 'disabled title="본인 등급은 여기서 낮출 수 없습니다"' : ''}>
+                            <option value="0" ${u.role === 0 ? 'selected' : ''}>일반 (0)</option>
+                            <option value="1" ${u.role === 1 ? 'selected' : ''}>골드 (1)</option>
+                            <option value="2" ${u.role === 2 ? 'selected' : ''}>관리자 (2)</option>
+                        </select>
+                    </td>
+                    <td class="px-3 py-2 text-right space-x-2">
+                        <button class="save-btn text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700">저장</button>
+                        <button class="delete-btn text-xs bg-red-500 text-white px-3 py-1.5 rounded hover:bg-red-600" ${u.id === myUserId ? 'disabled title="본인 계정은 삭제할 수 없습니다"' : ''}>삭제</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            document.getElementById('content-area').innerHTML = `
+                <div class="bg-white border-2 border-red-100 rounded-xl p-6 mb-6 text-center">
+                    <div class="text-3xl mb-2">🛠</div>
+                    <p class="font-bold text-red-600">관리자 페이지 접근이 허용되었습니다</p>
+                </div>
+                <div id="admin-msg" class="text-sm mb-3"></div>
+                <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-100 text-gray-600">
+                            <tr>
+                                <th class="text-left px-3 py-2">#</th>
+                                <th class="text-left px-3 py-2">아이디</th>
+                                <th class="text-left px-3 py-2">등급</th>
+                                <th class="text-right px-3 py-2">작업</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+
+            document.querySelectorAll('.save-btn').forEach(btn => {
+                btn.addEventListener('click', onSaveRole);
+            });
+            document.querySelectorAll('.delete-btn').forEach(btn => {
+                btn.addEventListener('click', onDeleteUser);
+            });
+        }
+
+        function showAdminMsg(text, ok) {
+            const box = document.getElementById('admin-msg');
+            if (!box) return;
+            box.textContent = text;
+            box.className = 'text-sm mb-3 ' + (ok ? 'text-emerald-600' : 'text-red-500');
+        }
+
+        async function onSaveRole(e) {
+            const row = e.target.closest('tr');
+            const id = row.dataset.id;
+            const role = Number(row.querySelector('.role-select').value);
+            const token = localStorage.getItem('token');
+
+            const res = await fetch(`/api/admin/users/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ role })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                await renderUserTable();
+                showAdminMsg(`${data.username} 님의 등급을 ${data.role_name}(${data.role})로 변경했습니다.`, true);
+            } else {
+                showAdminMsg(data.msg || '수정에 실패했습니다.', false);
+            }
+        }
+
+        async function onDeleteUser(e) {
+            const row = e.target.closest('tr');
+            const id = row.dataset.id;
+            const username = row.querySelector('td:nth-child(2)').textContent.trim();
+            if (!confirm(`${username} 계정을 정말 삭제하시겠습니까?`)) return;
+
+            const token = localStorage.getItem('token');
+            const res = await fetch(`/api/admin/users/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                await renderUserTable();
+                showAdminMsg(data.msg, true);
+            } else {
+                showAdminMsg(data.msg || '삭제에 실패했습니다.', false);
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/[&<>'"]/g,
+                tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+            );
+        }
+
+        async function main() {
+            const token = localStorage.getItem('token');
+            const username = localStorage.getItem('username');
+            const role = localStorage.getItem('role') !== null ? Number(localStorage.getItem('role')) : undefined;
+            renderAuthNav(username, role);
+
+            if (!token) {
+                renderDenied('로그인이 필요합니다.', null, undefined, '관리자', 2);
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/access/admin', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    // 내 id 를 알아내서(수정/삭제 UI에서 본인 계정 보호에 사용) /api/auth/me 로 조회
+                    const meRes = await fetch('/api/auth/me', { headers: { 'Authorization': `Bearer ${token}` } });
+                    const me = await meRes.json();
+                    myUserId = me.id;
+                    renderUserTable();
+                } else if (res.status === 403) {
+                    renderDenied(data.msg, data.current_role_name, data.current_role, data.required_role_name, data.required_role);
+                } else {
+                    renderDenied('로그인이 만료되었거나 유효하지 않습니다. 다시 로그인해주세요.', null, undefined, '관리자', 2);
+                }
+            } catch (e) {
+                renderDenied('서버와 통신 중 오류가 발생했습니다.', null, undefined, '관리자', 2);
+            }
+        }
+
+        main();
+    </script>
+</body>
+
+</html>
