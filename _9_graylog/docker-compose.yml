@@ -25,7 +25,7 @@ services:
     image: graylog/graylog:6.1
     container_name: gl-graylog
     environment:
-      - GRAYLOG_PASSWORD_SECRET=k9#mP2$xL7!qR4$v        # openssl rand -hex 48
+      - GRAYLOG_PASSWORD_SECRET=23a41178b98272dbfbed2138241c97e90553c6d5c4b0d5a25a506989b66b3686        # openssl rand -hex 32 ($ 넣지 말 것: compose가 변수로 치환)
       - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918  # 'admin'
       - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
       - GRAYLOG_MONGODB_URI=mongodb://gl-mongo:27017/graylog
