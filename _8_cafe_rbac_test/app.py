@@ -334,18 +334,6 @@ def admin_revoke_user():
     if not target:
         return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
 
-    # 같은 계정에 회수 요청이 중복으로 들어오는 경우(알림이 두 번 잡히는 등)
-    # 감사 로그만 계속 쌓이지 않도록 여기서 끊는다.
-    if target.role == ROLE_GENERAL:
-        return jsonify({
-            "msg": f"{username} 계정은 이미 일반 등급입니다. (회수할 권한 없음)",
-            "username": username,
-            "old_role": ROLE_NAMES.get(ROLE_GENERAL),
-            "new_role": ROLE_NAMES.get(ROLE_GENERAL),
-            "already_revoked": True,
-            "event_id": None,
-        }), 200
-
     old_role = target.role
     target.role = ROLE_GENERAL
     target.role_granted_by = None
@@ -366,7 +354,6 @@ def admin_revoke_user():
         "username": username,
         "old_role": ROLE_NAMES.get(old_role),
         "new_role": ROLE_NAMES.get(ROLE_GENERAL),
-        "already_revoked": False,
         "event_id": event.id,
     }), 200
 
