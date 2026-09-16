@@ -1,6 +1,9 @@
 from flask import Flask, render_template, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import (
+    JWTManager, create_access_token, jwt_required, get_jwt_identity,
+    verify_jwt_in_request,
+)
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
 from functools import wraps
@@ -31,6 +34,9 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=2)
 
 # 실습과제: 게시판 REST API 를 호출할 때 쓰는 키. 소스에 직접 쓰지 않고 .env 에서 읽는다.
 SECURITY_API_KEY = os.environ.get("SECURITY_API_KEY", "dev-only-change-me")
+# 과잉권한 회수봇(privilege_revoke_bot.py) 이 /api/admin/users, /api/admin/revoke 를
+# 호출할 때 쓰는 키. 따로 안 정해두면 SECURITY_API_KEY 를 같이 쓴다.
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", SECURITY_API_KEY)
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -44,6 +50,8 @@ ROLE_GOLD = 1      # 골드 등급 — 중간 관리자
 ROLE_ADMIN = 2     # 관리자
 
 ROLE_NAMES = {ROLE_GENERAL: '일반', ROLE_GOLD: '골드', ROLE_ADMIN: '관리자'}
+# 회수봇이 role=admin 처럼 영문 이름으로 필터링을 요청할 때 쓰는 역방향 맵.
+ROLE_NAME_TO_VALUE = {'general': ROLE_GENERAL, 'gold': ROLE_GOLD, 'admin': ROLE_ADMIN}
 
 # ----------------- Database Models -----------------
 class User(db.Model):
@@ -53,6 +61,9 @@ class User(db.Model):
     password = db.Column(db.String(255), nullable=False)
     # 가입 시 무조건 0(일반)으로 시작한다. 등급 변경은 관리자 페이지에서만 가능.
     role = db.Column(db.Integer, nullable=False, default=ROLE_GENERAL)
+    # 관리자 등급을 누가 부여했는지 기록 — 회수봇이 허용목록 밖 admin(=부여 근거가 없거나
+    # 의심스러운 계정)을 탐지할 때 참고한다. 일반/골드로 내려가면 다시 비운다.
+    role_granted_by = db.Column(db.String(80), nullable=True)
 
     def to_dict(self):
         return {
@@ -60,6 +71,7 @@ class User(db.Model):
             "username": self.username,
             "role": self.role,
             "role_name": ROLE_NAMES.get(self.role, '알수없음'),
+            "role_granted_by": self.role_granted_by,
         }
 
 class Post(db.Model):
@@ -202,10 +214,39 @@ def access_admin(current_user):
 
 # ----------------- 요구사항 5) 관리자 페이지의 회원 조회/수정/삭제 -----------------
 @app.route('/api/admin/users', methods=['GET'])
-@role_required(ROLE_ADMIN)
-def admin_list_users(current_user):
-    users = User.query.order_by(User.id).all()
-    return jsonify([u.to_dict() for u in users]), 200
+def admin_list_users():
+    """사람(관리자 로그인 JWT)과 자동화(privilege_revoke_bot.py 의 X-API-Key) 양쪽이 호출한다.
+
+    - X-API-Key 헤더가 있으면 ADMIN_API_KEY 와 비교해서 인증한다(회수봇용).
+    - 없으면 기존처럼 JWT 로그인 + 관리자 등급을 확인한다(관리자 페이지 화면용).
+    - ?role=general|gold|admin 으로 등급 필터링을 지원한다(회수봇이 admin만 조회).
+    """
+    api_key = request.headers.get('X-API-Key')
+    if api_key:
+        if api_key != ADMIN_API_KEY:
+            return jsonify({"msg": "인증 실패: X-API-Key 가 올바르지 않습니다."}), 401
+    else:
+        verify_jwt_in_request()
+        current_user = User.query.get(get_jwt_identity())
+        if not current_user:
+            return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+        if current_user.role < ROLE_ADMIN:
+            return jsonify({
+                "msg": f"접근 권한이 없습니다. (현재 등급: {ROLE_NAMES.get(current_user.role)}[{current_user.role}], "
+                       f"필요 등급: {ROLE_NAMES.get(ROLE_ADMIN)}[{ROLE_ADMIN}] 이상)",
+                "current_role": current_user.role,
+                "required_role": ROLE_ADMIN,
+            }), 403
+
+    query = User.query
+    role_filter = request.args.get('role')
+    if role_filter:
+        if role_filter.lower() not in ROLE_NAME_TO_VALUE:
+            return jsonify({"msg": "role 파라미터는 general/gold/admin 중 하나여야 합니다."}), 400
+        query = query.filter(User.role == ROLE_NAME_TO_VALUE[role_filter.lower()])
+
+    users = query.order_by(User.id).all()
+    return jsonify({"users": [u.to_dict() for u in users]}), 200
 
 
 @app.route('/api/admin/users/<int:user_id>', methods=['PUT'])
@@ -223,6 +264,12 @@ def admin_update_user(current_user, user_id):
             return jsonify({"msg": "role 은 0(일반)/1(골드)/2(관리자) 중 하나여야 합니다."}), 400
         if target.id == current_user.id and new_role != ROLE_ADMIN:
             return jsonify({"msg": "본인의 관리자 등급은 스스로 낮출 수 없습니다."}), 400
+        # 관리자로 새로 올릴 때만 부여자를 기록하고, 관리자가 아니게 되면 비운다.
+        if new_role == ROLE_ADMIN:
+            if target.role != ROLE_ADMIN:
+                target.role_granted_by = current_user.username
+        else:
+            target.role_granted_by = None
         target.role = new_role
 
     if 'username' in data and data['username']:
@@ -247,6 +294,51 @@ def admin_delete_user(current_user, user_id):
     db.session.delete(target)
     db.session.commit()
     return jsonify({"msg": f"{target.username} 계정을 삭제했습니다."}), 200
+
+
+@app.route('/api/admin/revoke', methods=['POST'])
+def admin_revoke_user():
+    """과잉권한 자동 회수 엔드포인트.
+
+    privilege_revoke_bot.py 가 --revoke 로 직접 부르거나, 봇이 Graylog 에 신고한
+    이벤트를 받아 n8n 이 대신 호출한다. 둘 다 사람이 아니라 자동화이므로 JWT 로그인
+    없이 X-API-Key 로만 인증한다. 대상 계정을 일반(0) 등급으로 강등하고, 회수 사실을
+    security_events 에 남겨 /security 대시보드에서도 보이게 한다.
+    """
+    if request.headers.get('X-API-Key') != ADMIN_API_KEY:
+        return jsonify({"msg": "인증 실패: X-API-Key 가 없거나 올바르지 않습니다."}), 401
+
+    data = request.get_json(silent=True) or {}
+    username = data.get('username')
+    if not username:
+        return jsonify({"msg": "username 은 필수입니다."}), 400
+
+    target = User.query.filter_by(username=username).first()
+    if not target:
+        return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+
+    old_role = target.role
+    target.role = ROLE_GENERAL
+    target.role_granted_by = None
+    db.session.commit()
+
+    event = SecurityEvent(
+        student=data.get('student', 'unknown'),
+        src_ip=data.get('src_ip', '127.0.0.1'),
+        decision='deny',
+        severity='High',
+        reason=data.get('reason') or f"관리자 권한 자동 회수: {username}",
+    )
+    db.session.add(event)
+    db.session.commit()
+
+    return jsonify({
+        "msg": f"{username} 계정의 관리자 권한을 회수했습니다.",
+        "username": username,
+        "old_role": ROLE_NAMES.get(old_role),
+        "new_role": ROLE_NAMES.get(ROLE_GENERAL),
+        "event_id": event.id,
+    }), 200
 
 
 # ----------------- 등급별 화면 -----------------
