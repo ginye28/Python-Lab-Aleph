@@ -1,0 +1,149 @@
+{
+  "name": "과잉권한 회수봇 - 디스코드 알림",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "privilege-violations",
+        "options": {}
+      },
+      "id": "fa624695-c638-4924-bbcf-5958747dbdf6",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1040,
+        240
+      ],
+      "webhookId": "79e2b6eb-664b-48b1-ac76-df613270dd1b"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 회수봇(privilege_revoke_bot.py)이 보낸 위반 목록을 건별 아이템으로 펼치고\n// 메신저에 보낼 문구를 만든다.\n//\n// 들어오는 모양:\n//   { student, rule, src_ip, violations: [ { username, granted_by, role, role_name }, ... ] }\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  // Webhook 노드의 출력은 { headers, params, query, body } 형태다.\n  const src = item.json.body ?? item.json;\n  const student = src.student ?? 'unknown';\n  const rule = src.rule ?? 'priv-unauthorized-admin';\n  const srcIp = src.src_ip ?? 'unknown';\n  const violations = src.violations ?? [];\n\n  for (const v of violations) {\n    const grantedBy = v.granted_by ?? 'unknown';\n    const roleName = v.role_name ?? '관리자';\n\n    results.push({\n      json: {\n        student,\n        rule,\n        src_ip: srcIp,\n        username: v.username,\n        granted_by: grantedBy,\n        role_name: roleName,\n        severity: 'High',\n        decision: 'deny',\n        reason: `허용목록 밖 ${roleName} 권한 (부여자: ${grantedBy})`,\n        message:\n          `🚨 [과잉권한 탐지] '${v.username}' 계정이 허용목록 밖 ${roleName} 권한을 갖고 있습니다.\\n` +\n          `• 부여자: ${grantedBy}\\n` +\n          `• 탐지 규칙: ${rule}\\n` +\n          `• student: ${student}`,\n      },\n    });\n  }\n}\n\nreturn results;\n",
+        "language": "javaScript"
+      },
+      "id": "4d6d8e8e-2f9a-4908-b7e6-8c8a6f39f936",
+      "name": "위반 정리",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.message }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fa7d86eb-e379-4687-8e23-ece244258927",
+      "name": "디스코드",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -540,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:5000/api/admin/revoke",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.ADMIN_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "username",
+              "value": "={{ $json.username }}"
+            },
+            {
+              "name": "student",
+              "value": "={{ $json.student }}"
+            },
+            {
+              "name": "src_ip",
+              "value": "={{ $json.src_ip }}"
+            },
+            {
+              "name": "reason",
+              "value": "={{ $json.reason }}"
+            },
+            {
+              "name": "source",
+              "value": "n8n-privilege-guard"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "f73be792-6e66-48df-9f41-5555821ea685",
+      "name": "권한 회수 (기본 비활성)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -540,
+        352
+      ],
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "위반 정리",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "위반 정리": {
+      "main": [
+        [
+          {
+            "node": "디스코드",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "권한 회수 (기본 비활성)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}

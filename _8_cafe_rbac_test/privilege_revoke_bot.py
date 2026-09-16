@@ -51,6 +51,12 @@ def cfg():
       'graylog_port': int(os.environ.get('GRAYLOG_PORT', '12201')),
       'student': os.environ.get('STUDENT', 'lsy'),
       'src_ip': os.environ.get('BOARD_SRC_IP', '127.0.0.1'),  # 신고에 남길 대표 IP
+      # 메신저 알림용 n8n 웹훅. workflows/privilege-revoke-bot.json 을 Import 한 뒤
+      # Webhook 노드에서 실제 Production URL 을 확인할 수 있다.
+      'n8n_url': os.environ.get(
+          'PRIVILEGE_WEBHOOK_URL',
+          'http://localhost:5678/webhook/privilege-violations',
+      ),
   }
 
 
@@ -91,6 +97,36 @@ def send_gelf(c, user):
     s.close()
 
 
+def send_n8n(c, bad):
+  """위반 전체를 n8n 웹훅으로 한 번에 보낸다(메신저 알림 담당).
+
+  Graylog 신고는 UDP 라 안 떠 있어도 조용히 사라지지만, 이쪽은 HTTP 라
+  실패하면 이유를 알 수 있다. n8n 이 꺼져 있어도 프로그램은 죽지 않는다.
+  """
+  payload = {
+      'student': c['student'],
+      'rule': 'priv-unauthorized-admin',
+      'src_ip': c['src_ip'],
+      'violations': [
+          {
+              'username': u['username'],
+              'granted_by': u.get('role_granted_by') or 'unknown',
+              'role': u.get('role'),
+              'role_name': u.get('role_name') or '관리자',
+          }
+          for u in bad
+      ],
+  }
+  # n8n 웹훅 응답은 본문이 비어 있을 수도 있어서 JSON 으로 읽지 않고 상태코드만 본다.
+  req = urllib.request.Request(c['n8n_url'], data=json.dumps(payload).encode(), method='POST')
+  req.add_header('Content-Type', 'application/json')
+  try:
+    with urllib.request.urlopen(req, timeout=10) as r:
+      print(f"    → n8n 알림 전송 (HTTP {r.status}, {len(bad)}건)")
+  except Exception as e:
+    print(f"    [!] n8n 알림 실패: {e}", file=sys.stderr)
+
+
 def main():
   ap = argparse.ArgumentParser()
   ap.add_argument('--dry-run', action='store_true', help='신고 없이 위반만 출력')
@@ -113,6 +149,10 @@ def main():
     return
 
   print(f"[!] 과잉권한 admin {len(bad)}건 탐지: " + ', '.join(u['username'] for u in bad))
+
+  if not args.dry_run:
+    send_n8n(c, bad)   # 메신저(디스코드) 알림 — 위반 전체를 한 번에 보낸다
+
   for u in bad:
     if args.dry_run:
       print(f"    - {u['username']} (부여자 {u.get('role_granted_by')}) [dry-run]")
