@@ -257,7 +257,17 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password })
             });
-            const data = await res.json();
+
+            // 서버가 500 을 내면 JSON 이 아니라 HTML 오류 페이지가 돌아온다. 그대로
+            // res.json() 을 부르면 예외만 나고 화면에는 아무 반응이 없어서 원인을
+            // 알 수 없다. 여기서 붙잡아 무슨 일이 났는지 알려 준다.
+            let data;
+            try {
+                data = await res.json();
+            } catch (e) {
+                alert(`서버 오류 (HTTP ${res.status}) — 응답이 JSON 이 아닙니다.\n서버를 띄운 터미널의 오류 메시지를 확인해주세요.`);
+                return;
+            }
 
             if (res.ok) {
                 if (isAuthModeLogin) {

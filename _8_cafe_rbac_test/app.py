@@ -104,8 +104,25 @@ class SecurityEvent(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
+def ensure_role_granted_by_column():
+    """이미 만들어져 있는 cafe_users 에 role_granted_by 컬럼을 채워 넣는다.
+
+    db.create_all() 은 '없는 테이블'만 만들고 기존 테이블에 컬럼을 추가하지는 않는다.
+    이 실습은 마이그레이션 도구(alembic)를 쓰지 않으므로, 예전 스키마로 만들어진
+    테이블을 쓰던 사람도 앱만 다시 켜면 되도록 여기서 한 번 확인하고 붙인다.
+    컬럼이 이미 있으면 아무 것도 하지 않는다.
+    """
+    columns = {c['name'] for c in db.inspect(db.engine).get_columns('cafe_users')}
+    if 'role_granted_by' in columns:
+        return
+    db.session.execute(db.text('ALTER TABLE cafe_users ADD COLUMN role_granted_by VARCHAR(80) NULL'))
+    db.session.commit()
+    print('[마이그레이션] cafe_users 에 role_granted_by 컬럼을 추가했습니다.')
+
+
 with app.app_context():
     db.create_all()
+    ensure_role_granted_by_column()
 
 # ----------------- Auth Endpoints -----------------
 @app.route('/api/auth/register', methods=['POST'])
