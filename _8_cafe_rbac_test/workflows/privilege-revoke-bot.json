@@ -1,5 +1,5 @@
 {
-  "name": "과잉권한 회수봇 - 디스코드 알림",
+  "name": "과잉권한 회수봇 - 탐지/회수 알림",
   "nodes": [
     {
       "parameters": {
@@ -7,28 +7,28 @@
         "path": "privilege-violations",
         "options": {}
       },
-      "id": "fa624695-c638-4924-bbcf-5958747dbdf6",
+      "id": "e981f01e-0b16-4a58-bd70-0b72eceb3495",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        -1040,
-        240
+        -1060,
+        260
       ],
-      "webhookId": "79e2b6eb-664b-48b1-ac76-df613270dd1b"
+      "webhookId": "fc247d23-0330-4280-b388-1efe8acca706"
     },
     {
       "parameters": {
-        "jsCode": "// 회수봇(privilege_revoke_bot.py)이 보낸 위반 목록을 건별 아이템으로 펼치고\n// 메신저에 보낼 문구를 만든다.\n//\n// 들어오는 모양:\n//   { student, rule, src_ip, violations: [ { username, granted_by, role, role_name }, ... ] }\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  // Webhook 노드의 출력은 { headers, params, query, body } 형태다.\n  const src = item.json.body ?? item.json;\n  const student = src.student ?? 'unknown';\n  const rule = src.rule ?? 'priv-unauthorized-admin';\n  const srcIp = src.src_ip ?? 'unknown';\n  const violations = src.violations ?? [];\n\n  for (const v of violations) {\n    const grantedBy = v.granted_by ?? 'unknown';\n    const roleName = v.role_name ?? '관리자';\n\n    results.push({\n      json: {\n        student,\n        rule,\n        src_ip: srcIp,\n        username: v.username,\n        granted_by: grantedBy,\n        role_name: roleName,\n        severity: 'High',\n        decision: 'deny',\n        reason: `허용목록 밖 ${roleName} 권한 (부여자: ${grantedBy})`,\n        message:\n          `🚨 [과잉권한 탐지] '${v.username}' 계정이 허용목록 밖 ${roleName} 권한을 갖고 있습니다.\\n` +\n          `• 부여자: ${grantedBy}\\n` +\n          `• 탐지 규칙: ${rule}\\n` +\n          `• student: ${student}`,\n      },\n    });\n  }\n}\n\nreturn results;\n",
+        "jsCode": "// 회수봇(privilege_revoke_bot.py)이 보낸 위반 목록을 '건별 아이템'으로 펼친다.\n//\n// 여기서 아이템을 나눠 두는 것이 핵심이다. n8n 의 HTTP Request 노드는 들어온\n// 아이템 수만큼 실행되므로, 위반이 2건이면 회수 호출도 2번 나간다.\n// (Graylog 알림으로 트리거하면 backlog 중 1건만 읽게 되어 하나만 회수된다.)\n//\n// 들어오는 모양:\n//   { student, rule, src_ip, violations: [ { username, granted_by, role, role_name }, ... ] }\n\nconst results = [];\n\nfor (const item of $input.all()) {\n  // Webhook 노드의 출력은 { headers, params, query, body } 형태다.\n  const src = item.json.body ?? item.json;\n  const student = src.student ?? 'unknown';\n  const rule = src.rule ?? 'priv-unauthorized-admin';\n  const srcIp = src.src_ip ?? 'unknown';\n  const violations = src.violations ?? [];\n\n  for (const v of violations) {\n    const grantedBy = v.granted_by ?? 'unknown';\n    const roleName = v.role_name ?? '관리자';\n\n    results.push({\n      json: {\n        student,\n        rule,\n        src_ip: srcIp,\n        username: v.username,\n        granted_by: grantedBy,\n        role_name: roleName,\n        reason: `허용목록 밖 ${roleName} 권한 (부여자: ${grantedBy})`,\n        message:\n          `🚨 [과잉권한 탐지] '${v.username}' 계정이 허용목록 밖 ${roleName} 권한을 갖고 있습니다.\\n` +\n          `• 부여자: ${grantedBy}\\n` +\n          `• 탐지 규칙: ${rule}\\n` +\n          `• student: ${student}`,\n      },\n    });\n  }\n}\n\nreturn results;\n",
         "language": "javaScript"
       },
-      "id": "4d6d8e8e-2f9a-4908-b7e6-8c8a6f39f936",
+      "id": "0173f168-85d9-45e0-bdaa-bcfcced81171",
       "name": "위반 정리",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -800,
-        240
+        -820,
+        260
       ]
     },
     {
@@ -46,13 +46,13 @@
         },
         "options": {}
       },
-      "id": "fa7d86eb-e379-4687-8e23-ece244258927",
-      "name": "디스코드",
+      "id": "90e37b4e-512a-45eb-94a2-afd15e3dac14",
+      "name": "디스코드 - 탐지 알림",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -540,
-        144
+        -560,
+        140
       ]
     },
     {
@@ -93,24 +93,40 @@
             }
           ]
         },
-        "options": {
-          "response": {
-            "response": {
-              "fullResponse": true,
-              "responseFormat": "json"
-            }
-          }
-        }
+        "options": {}
       },
-      "id": "f73be792-6e66-48df-9f41-5555821ea685",
-      "name": "권한 회수 (기본 비활성)",
+      "id": "da7ac320-db84-4e7d-9951-465a73cb06ff",
+      "name": "권한 회수",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -540,
-        352
-      ],
-      "disabled": true
+        -560,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "=🔓 [권한 회수] {{ $json.username }} : {{ $json.old_role }} → {{ $json.new_role }}{{ $json.already_revoked ? ' (이미 일반 등급 — 변경 없음)' : ' (event ' + $json.event_id + ')' }} — 과잉권한 자동 회수"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f011b7f4-6adb-4e35-a092-7e7c7341520a",
+      "name": "디스코드 - 회수 알림",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -300,
+        380
+      ]
     }
   ],
   "connections": {
@@ -129,12 +145,23 @@
       "main": [
         [
           {
-            "node": "디스코드",
+            "node": "디스코드 - 탐지 알림",
             "type": "main",
             "index": 0
           },
           {
-            "node": "권한 회수 (기본 비활성)",
+            "node": "권한 회수",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "권한 회수": {
+      "main": [
+        [
+          {
+            "node": "디스코드 - 회수 알림",
             "type": "main",
             "index": 0
           }
