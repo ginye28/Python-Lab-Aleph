@@ -313,6 +313,62 @@ def admin_delete_user(current_user, user_id):
     return jsonify({"msg": f"{target.username} 계정을 삭제했습니다."}), 200
 
 
+@app.route('/api/admin/grant', methods=['POST'])
+def admin_grant_user():
+    """등급 부여 엔드포인트 — 회수(/api/admin/revoke)의 짝.
+
+    회수봇을 시험할 때 '허용목록 밖 관리자'를 만들어 두는 용도로 쓴다. 관리자
+    페이지(PUT /api/admin/users/<id>)와 달리 사람의 로그인 없이 X-API-Key 로만
+    인증하므로 Postman·스크립트에서 바로 부를 수 있다.
+
+    role 은 'admin' 처럼 이름으로도, 2 처럼 숫자로도 받는다. 생략하면 admin.
+    """
+    if request.headers.get('X-API-Key') != ADMIN_API_KEY:
+        return jsonify({"msg": "인증 실패: X-API-Key 가 없거나 올바르지 않습니다."}), 401
+
+    data = request.get_json(silent=True) or {}
+    username = data.get('username')
+    if not username:
+        return jsonify({"msg": "username 은 필수입니다."}), 400
+
+    role_raw = data.get('role', 'admin')
+    if isinstance(role_raw, str) and not role_raw.strip().isdigit():
+        new_role = ROLE_NAME_TO_VALUE.get(role_raw.strip().lower())
+    else:
+        new_role = int(role_raw)
+    if new_role not in ROLE_NAMES:
+        return jsonify({"msg": "role 은 general/gold/admin 또는 0/1/2 중 하나여야 합니다."}), 400
+
+    target = User.query.filter_by(username=username).first()
+    if not target:
+        return jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404
+
+    old_role = target.role
+    target.role = new_role
+    # 관리자로 올릴 때만 부여자를 남긴다. 회수봇이 '누가 줬는지' 를 신고에 싣는다.
+    target.role_granted_by = data.get('granted_by', 'api') if new_role == ROLE_ADMIN else None
+    db.session.commit()
+
+    event = SecurityEvent(
+        student=data.get('student', 'unknown'),
+        src_ip=data.get('src_ip', '127.0.0.1'),
+        decision='allow',
+        severity='Medium',
+        reason=data.get('reason') or f"{ROLE_NAMES[new_role]} 등급 부여: {username}",
+    )
+    db.session.add(event)
+    db.session.commit()
+
+    return jsonify({
+        "msg": f"{username} 계정에 {ROLE_NAMES[new_role]} 등급을 부여했습니다.",
+        "username": username,
+        "old_role": ROLE_NAMES.get(old_role),
+        "new_role": ROLE_NAMES.get(new_role),
+        "role_granted_by": target.role_granted_by,
+        "event_id": event.id,
+    }), 200
+
+
 @app.route('/api/admin/revoke', methods=['POST'])
 def admin_revoke_user():
     """과잉권한 자동 회수 엔드포인트.
