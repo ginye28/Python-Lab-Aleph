@@ -38,6 +38,33 @@ SECURITY_API_KEY = os.environ.get("SECURITY_API_KEY", "dev-only-change-me")
 # 호출할 때 쓰는 키. 따로 안 정해두면 SECURITY_API_KEY 를 같이 쓴다.
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", SECURITY_API_KEY)
 
+
+def _mask(value):
+    """진단 로그용 — 값 전체를 찍지 않고 앞뒤 몇 글자·길이만 보여준다."""
+    if not value:
+        return "(비어있음)"
+    if len(value) <= 8:
+        return f"{value[:2]}…(길이 {len(value)})"
+    return f"{value[:4]}…{value[-4:]} (길이 {len(value)})"
+
+
+def check_admin_api_key():
+    """X-API-Key 를 ADMIN_API_KEY 와 비교한다. 401 원인을 서버 터미널에서 바로
+    확인할 수 있도록, 불일치할 때만 두 값의 길이·앞뒤 글자를 진단으로 찍는다
+    (전체 값은 절대 찍지 않는다). 문제를 못 찾으면 이 print 를 지운다."""
+    received = request.headers.get('X-API-Key')
+    if received == ADMIN_API_KEY:
+        return True
+    print(
+        "[진단] X-API-Key 불일치\n"
+        f"       요청으로 받은 값 : {_mask(received)}\n"
+        f"       .env 의 ADMIN_API_KEY : {_mask(ADMIN_API_KEY)}\n"
+        "       -> 길이나 앞뒤 글자가 다르면 Postman 헤더 값을 .env 값으로 다시 복붙하세요.\n"
+        "       -> '(비어있음)' 이면 헤더 자체가 안 왔다는 뜻 — Postman 에서 해당 헤더 체크박스가 켜져 있는지 확인하세요."
+    )
+    return False
+
+
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
@@ -240,7 +267,7 @@ def admin_list_users():
     """
     api_key = request.headers.get('X-API-Key')
     if api_key:
-        if api_key != ADMIN_API_KEY:
+        if not check_admin_api_key():
             return jsonify({"msg": "인증 실패: X-API-Key 가 올바르지 않습니다."}), 401
     else:
         verify_jwt_in_request()
@@ -323,7 +350,7 @@ def admin_grant_user():
 
     role 은 'admin' 처럼 이름으로도, 2 처럼 숫자로도 받는다. 생략하면 admin.
     """
-    if request.headers.get('X-API-Key') != ADMIN_API_KEY:
+    if not check_admin_api_key():
         return jsonify({"msg": "인증 실패: X-API-Key 가 없거나 올바르지 않습니다."}), 401
 
     data = request.get_json(silent=True) or {}
@@ -378,7 +405,7 @@ def admin_revoke_user():
     없이 X-API-Key 로만 인증한다. 대상 계정을 일반(0) 등급으로 강등하고, 회수 사실을
     security_events 에 남겨 /security 대시보드에서도 보이게 한다.
     """
-    if request.headers.get('X-API-Key') != ADMIN_API_KEY:
+    if not check_admin_api_key():
         return jsonify({"msg": "인증 실패: X-API-Key 가 없거나 올바르지 않습니다."}), 401
 
     data = request.get_json(silent=True) or {}
