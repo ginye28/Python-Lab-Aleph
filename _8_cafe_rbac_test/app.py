@@ -660,4 +660,13 @@ def public_post_detail_page(uc_seq):
 
 # ----------------- 앱 실행 -----------------
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # 기본값은 127.0.0.1 — 이 PC 안에서만 접속된다.
+    # 리눅스 VM 등 같은 네트워크의 다른 장비에서 붙어야 하면 .env 에
+    # FLASK_HOST=0.0.0.0 을 넣는다. 단, debug=True 인 채로 밖에 열면
+    # Werkzeug 디버거가 노출돼 원격 코드 실행이 가능해지므로
+    # 외부에 열 때는 FLASK_DEBUG=0 도 같이 넣어 디버거를 끈다.
+    app.run(
+        host=os.environ.get("FLASK_HOST", "127.0.0.1"),
+        debug=os.environ.get("FLASK_DEBUG", "1") == "1",
+        port=5000,
+    )
