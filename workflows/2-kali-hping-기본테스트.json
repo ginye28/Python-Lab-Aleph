@@ -1,0 +1,166 @@
+{
+  "name": "2-kali-hping-기본테스트",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vuln-scan",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -960,
+        176
+      ],
+      "id": "6734edfb-6764-4e8d-9972-8e1b1cb3ce9c",
+      "name": "Webhook",
+      "webhookId": "10cd43f1-e065-4b7a-9e40-af63d49a91ab"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.DISCORD_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (n8n-lab)"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        336,
+        176
+      ],
+      "id": "b5686f4b-9aec-45eb-aed4-9f9a12e0ba91",
+      "name": "디스코드"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        336,
+        -16
+      ],
+      "id": "c5fa4757-e164-448e-8762-a2a16e65fb3c",
+      "name": "슬랙"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage ",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "=7823495352"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        336,
+        384
+      ],
+      "id": "2468e845-5f98-467f-9fc7-7e1109209ed1",
+      "name": "텔레그램"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const item of $input.all()) {\n  const b = (item.json ?? {}).body ?? item.json ?? {};\n  const host = b.host ?? '?';\n  const open = b.open ?? b.open_ports ?? [];\n  const openStr = Array.isArray(open) ? open.join(', ') : String(open);\n  const student = b.student ?? 'lsy';\n  const risky = openStr.includes('3306') || openStr.includes('9000');\n  const head = risky ? '🛰️🚨 [취약점 점검·주의]' : '🛰️ [취약점 점검]';\n  const text = `${head}${host}\\n열린 포트:${openStr} (학생${student})\\n` +\n               (risky ? '⚠ MySQL/SIEM 노출 — 바인딩·인증 점검 필요' : '노출 서비스 점검 권장');\n  out.push({ json: { text, host, open: openStr, student } });\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -736,
+        176
+      ],
+      "id": "bb56ef4b-00e6-45f3-a4e1-f1f079e715c3",
+      "name": "port 확인"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "port 확인",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "port 확인": {
+      "main": [
+        [
+          {
+            "node": "슬랙",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "디스코드",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "텔레그램",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "c58e0d9b-3516-4024-876c-657754c52956",
+  "meta": {
+    "instanceId": "fc784899174878c7ccb6e0c508daef2bd016bfcc90a2977d0e9d8bd69c34dca1"
+  },
+  "nodeGroups": [],
+  "id": "3bafYV5oqFYUnaxc",
+  "tags": []
+}
