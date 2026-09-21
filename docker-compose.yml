@@ -44,6 +44,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       SECURITY_API_KEY: ${SECURITY_API_KEY:-}
+      # 과잉권한 회수 워크플로의 '권한 회수' 노드가 X-API-Key 헤더에 쓴다.
+      # .env 에서 비워두면 SECURITY_API_KEY 를 대신 쓴다(게시판 app.py 와 같은 규칙).
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-${SECURITY_API_KEY:-}}
     volumes:
       - n8n_data:/home/node/.n8n
 
