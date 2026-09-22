@@ -89,11 +89,14 @@
 
         async function load() {
             const student = document.getElementById('student').value.trim();
-            const url = '/api/security/events' + (student ? '?student=' + encodeURIComponent(student) : '');
+            // limit 을 명시한다 — 서버 기본값은 20건이라 대시보드에는 너무 적다.
+            const url = '/api/security/events?limit=100'
+                + (student ? '&student=' + encodeURIComponent(student) : '');
             const rows = document.getElementById('rows');
             try {
                 const res = await fetch(url);
-                const data = await res.json();
+                // 서버는 {count, events} 형태로 준다(강사님 저장소와 동일).
+                const data = (await res.json()).events || [];
 
                 const deny = data.filter(e => e.decision === 'deny');
                 const allow = data.filter(e => e.decision === 'allow');
