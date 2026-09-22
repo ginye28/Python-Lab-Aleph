@@ -7,7 +7,9 @@ from flask_jwt_extended import (
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
 from functools import wraps
+import json
 import os
+import socket
 import requests
 from dotenv import load_dotenv
 
@@ -46,6 +48,9 @@ SECURITY_WEBHOOK_URL = os.environ.get(
     "SECURITY_WEBHOOK_URL", "http://localhost:5678/webhook/security-events"
 )
 STUDENT_NAME = os.environ.get("STUDENT_NAME", "본인이름으로_바꾸세요")
+# Graylog 직통 신고 (privilege_revoke_bot.py 의 send_gelf 와 같은 방식 — GELF UDP).
+GRAYLOG_HOST = os.environ.get("GRAYLOG_HOST", "localhost")
+GRAYLOG_PORT = int(os.environ.get("GRAYLOG_PORT", "12201"))
 
 
 def _mask(value):
@@ -292,11 +297,37 @@ def admin_list_blocked():
 _login_fail_counts = {}
 
 
+def _send_gelf_login_bruteforce(ip, fail_count):
+    """Graylog 로 직통 GELF(UDP) 신고 — privilege_revoke_bot.py 의 send_gelf 와 같은 방식.
+    n8n 과는 완전히 별개 경로라, n8n 이 꺼져 있어도 Graylog 쪽은 그대로 남는다."""
+    msg = {
+        'version': '1.1', 'host': socket.gethostname(),
+        'short_message': f"login bruteforce: '{ip}' failed {fail_count} times in a row",
+        'level': 4,
+        '_rule': 'login-bruteforce',
+        '_src_ip': ip,
+        '_fail_count': fail_count,
+        '_student': STUDENT_NAME,
+    }
+    payload = json.dumps(msg).encode()
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.sendto(payload, (GRAYLOG_HOST, GRAYLOG_PORT))
+    except OSError as e:
+        print(f"[진단] 로그인 실패 신고를 Graylog 로 못 보냈습니다: {e}")
+    finally:
+        s.close()
+
+
 def _report_login_bruteforce(ip, fail_count):
-    """연속 실패 임계치를 넘긴 IP 를 즉시 차단하고, 기존 security-alert-bot(n8n)
-    경로로 신고한다. alert_sender.py 와 같은 payload 형태로 보내서, 이미 Publish 된
-    워크플로(판정 → 거부인가? → 슬랙/디스코드/텔레그램 + 게시판 저장)를 그대로 탄다.
-    n8n 이 꺼져 있어도 로그인 응답 자체는 막히지 않도록 실패를 삼킨다.
+    """연속 실패 임계치를 넘긴 IP 를 즉시 차단하고, 두 경로로 신고한다.
+
+    ① 기존 security-alert-bot(n8n) 웹훅 — alert_sender.py 와 같은 payload 형태로
+       보내서, 이미 Publish 된 워크플로(판정 → 거부인가? → 슬랙/디스코드/텔레그램 +
+       게시판 저장)를 그대로 탄다.
+    ② Graylog GELF 직통 신고.
+
+    둘 다 n8n/Graylog 가 꺼져 있어도 로그인 응답 자체는 막히지 않도록 실패를 삼킨다.
     """
     if not db.session.get(BlockedIP, ip):
         db.session.add(BlockedIP(
@@ -320,6 +351,8 @@ def _report_login_bruteforce(ip, fail_count):
         requests.post(SECURITY_WEBHOOK_URL, json=payload, timeout=5)
     except requests.RequestException as e:
         print(f"[진단] 로그인 실패 신고를 n8n 으로 못 보냈습니다: {e}")
+
+    _send_gelf_login_bruteforce(ip, fail_count)
 
 
 # ----------------- Auth Endpoints -----------------
