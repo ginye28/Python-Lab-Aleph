@@ -131,6 +131,28 @@ class SecurityEvent(db.Model):
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
+
+class BlockedIP(db.Model):
+    """차단된 IP 목록(실차단). before_request 미들웨어가 매 요청 이 표를 보고 403 처리한다.
+
+    관리자 페이지(또는 회수봇처럼 X-API-Key 를 쓰는 자동화)가 여기에 IP 를 추가하면,
+    그 IP 로 들어오는 이후 요청은 관리자 API(/api/admin/*)를 제외하고 앱에 닿지 못한다.
+    """
+    __tablename__ = 'cafe_blocked_ips'
+    ip = db.Column(db.String(45), primary_key=True)   # IPv6 까지 45자
+    reason = db.Column(db.String(200))
+    blocked_by = db.Column(db.String(80))
+    blocked_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    def to_dict(self):
+        return {
+            "ip": self.ip,
+            "reason": self.reason,
+            "blocked_by": self.blocked_by,
+            "blocked_at": self.blocked_at.isoformat() if self.blocked_at else None,
+        }
+
+
 def ensure_role_granted_by_column():
     """이미 만들어져 있는 cafe_users 에 role_granted_by 컬럼을 채워 넣는다.
 
@@ -148,8 +170,113 @@ def ensure_role_granted_by_column():
 
 
 with app.app_context():
-    db.create_all()
+    db.create_all()   # cafe_blocked_ips 처럼 없는 표는 여기서 새로 만들어진다.
     ensure_role_granted_by_column()
+
+
+def _client_ip():
+    """요청의 실제 클라이언트 IP. 프록시(n8n 등) 뒤라면 X-Forwarded-For 첫 홉을 신뢰한다.
+    (실습 한정 규칙 — 실서비스는 신뢰 프록시 목록으로 검증해야 스푸핑을 막는다.)"""
+    xff = request.headers.get('X-Forwarded-For', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or ''
+
+
+@app.before_request
+def block_ip_guard():
+    """차단된 IP 실차단(active response) — 미들웨어가 앱에 닿기 전에 403 으로 되돌린다.
+
+    - /api/admin/* 는 예외로 둔다. 그래야 관리자(사람 또는 회수봇)가 자기 자신을
+      막힌 IP 로 만들어 복구 불능이 되는 상황 없이 계속 차단/해제를 할 수 있다.
+    - 매 요청 cafe_blocked_ips 표를 조회한다. 실습 규모에선 충분하고, 실서비스는
+      캐시(Redis)나 방화벽(nftables) 계층으로 올려야 한다.
+    """
+    if request.path.startswith('/api/admin'):
+        return None
+    ip = _client_ip()
+    if ip and db.session.get(BlockedIP, ip):
+        return jsonify({"msg": "차단된 IP 입니다(관리자에게 문의).", "ip": ip, "blocked": True}), 403
+
+
+def _require_admin():
+    """관리자 전용 엔드포인트 공통 인증. admin_list_users 와 같은 방식으로
+
+    ① X-API-Key 헤더가 ADMIN_API_KEY 와 일치하면 통과(자동화 봇용) — 이때는 (None, None) 반환.
+    ② 없으면 JWT 로그인 + 관리자(2) 등급을 확인한다 — 통과하면 (User, None) 반환.
+    실패하면 (None, (jsonify(...), status)) 형태로 바로 돌려줄 응답을 반환한다.
+    """
+    api_key = request.headers.get('X-API-Key')
+    if api_key:
+        if check_admin_api_key():
+            return None, None
+        return None, (jsonify({"msg": "인증 실패: X-API-Key 가 올바르지 않습니다."}), 401)
+
+    verify_jwt_in_request()
+    current_user = User.query.get(get_jwt_identity())
+    if not current_user:
+        return None, (jsonify({"msg": "사용자를 찾을 수 없습니다."}), 404)
+    if current_user.role < ROLE_ADMIN:
+        return None, (jsonify({
+            "msg": f"접근 권한이 없습니다. (현재 등급: {ROLE_NAMES.get(current_user.role)}[{current_user.role}], "
+                   f"필요 등급: {ROLE_NAMES.get(ROLE_ADMIN)}[{ROLE_ADMIN}] 이상)",
+            "current_role": current_user.role,
+            "required_role": ROLE_ADMIN,
+        }), 403)
+    return current_user, None
+
+
+# ----------------- 요구사항 +a) IP 차단(block) -----------------
+@app.route('/api/admin/block', methods=['POST'])
+def admin_block_ip():
+    """공격 IP 실차단(active response) → cafe_blocked_ips 에 추가. body: {ip, reason}
+    이후 그 IP 로 오는 요청은 관리자 API 를 제외하고 미들웨어가 403 으로 막는다."""
+    admin_user, err = _require_admin()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    ip = (data.get('ip') or data.get('src_ip') or '').strip()
+    if not ip:
+        return jsonify({"msg": "ip(또는 src_ip) 는 필수입니다."}), 400
+
+    actor = admin_user.username if admin_user else 'apikey'
+    if db.session.get(BlockedIP, ip):
+        return jsonify({"msg": "이미 차단된 IP 입니다.", "ip": ip, "blocked": True, "changed": False}), 200
+
+    db.session.add(BlockedIP(ip=ip, reason=(data.get('reason') or f'관리자 차단 by {actor}')[:200], blocked_by=actor))
+    db.session.commit()
+    return jsonify({"msg": "IP 차단 완료", "ip": ip, "blocked": True, "changed": True, "blocked_by": actor}), 200
+
+
+@app.route('/api/admin/unblock', methods=['POST'])
+def admin_unblock_ip():
+    """IP 차단 해제. body: {ip}"""
+    _admin_user, err = _require_admin()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    ip = (data.get('ip') or data.get('src_ip') or '').strip()
+    if not ip:
+        return jsonify({"msg": "ip 는 필수입니다."}), 400
+
+    row = db.session.get(BlockedIP, ip)
+    if row:
+        db.session.delete(row)
+        db.session.commit()
+    return jsonify({"msg": "차단 해제 완료", "ip": ip, "blocked": False}), 200
+
+
+@app.route('/api/admin/blocked', methods=['GET'])
+def admin_list_blocked():
+    """차단된 IP 목록."""
+    _admin_user, err = _require_admin()
+    if err:
+        return err
+    rows = BlockedIP.query.order_by(BlockedIP.blocked_at.desc()).all()
+    return jsonify({"count": len(rows), "blocked": [r.to_dict() for r in rows]}), 200
+
 
 # ----------------- Auth Endpoints -----------------
 @app.route('/api/auth/register', methods=['POST'])
