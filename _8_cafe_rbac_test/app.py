@@ -5,7 +5,7 @@ from flask_jwt_extended import (
     verify_jwt_in_request,
 )
 from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import wraps
 import json
 import os
@@ -51,6 +51,11 @@ STUDENT_NAME = os.environ.get("STUDENT_NAME", "본인이름으로_바꾸세요")
 # Graylog 직통 신고 (privilege_revoke_bot.py 의 send_gelf 와 같은 방식 — GELF UDP).
 GRAYLOG_HOST = os.environ.get("GRAYLOG_HOST", "localhost")
 GRAYLOG_PORT = int(os.environ.get("GRAYLOG_PORT", "12201"))
+# admin 을 가져도 되는 계정(정책 허용목록). 위반 조회·회수봇의 기준이 된다.
+# 쉼표로 구분: "admin,instructor". 비어 있으면 모든 admin 을 위반으로 본다.
+ADMIN_ALLOWLIST = [u.strip() for u in os.environ.get("ADMIN_ALLOWLIST", "").split(',') if u.strip()]
+# 거부(deny) 이벤트가 들어오면 게시판에 '보안' 공지글을 자동 등록할지.
+AUTO_POST_ON_DENY = os.environ.get("AUTO_POST_ON_DENY", "0") == "1"
 
 
 def _mask(value):
@@ -92,7 +97,26 @@ ROLE_ADMIN = 2     # 관리자
 
 ROLE_NAMES = {ROLE_GENERAL: '일반', ROLE_GOLD: '골드', ROLE_ADMIN: '관리자'}
 # 회수봇이 role=admin 처럼 영문 이름으로 필터링을 요청할 때 쓰는 역방향 맵.
-ROLE_NAME_TO_VALUE = {'general': ROLE_GENERAL, 'gold': ROLE_GOLD, 'admin': ROLE_ADMIN}
+# 강사님 저장소(_7_board_test)는 등급을 'user'/'gold'/'admin' 문자열로 쓴다.
+# 이 앱은 숫자(0/1/2)로 두되, 그쪽 이름도 그대로 받아 같은 요청이 통하게 한다.
+ROLE_NAME_TO_VALUE = {
+    'general': ROLE_GENERAL, 'user': ROLE_GENERAL,
+    'gold': ROLE_GOLD,
+    'admin': ROLE_ADMIN,
+}
+# 응답에도 같은 문자열을 실어 준다(role_key) — 숫자만 보면 그쪽 도구가 못 읽는다.
+ROLE_KEYS = {ROLE_GENERAL: 'user', ROLE_GOLD: 'gold', ROLE_ADMIN: 'admin'}
+
+
+def _parse_role(value):
+    """'admin' 같은 이름과 2 같은 숫자를 모두 받아 등급 숫자로 바꾼다. 모르면 None."""
+    if isinstance(value, str) and not value.strip().isdigit():
+        return ROLE_NAME_TO_VALUE.get(value.strip().lower())
+    try:
+        role = int(value)
+    except (TypeError, ValueError):
+        return None
+    return role if role in ROLE_NAMES else None
 
 # ----------------- Database Models -----------------
 class User(db.Model):
@@ -105,6 +129,17 @@ class User(db.Model):
     # 관리자 등급을 누가 부여했는지 기록 — 회수봇이 허용목록 밖 admin(=부여 근거가 없거나
     # 의심스러운 계정)을 탐지할 때 참고한다. 일반/골드로 내려가면 다시 비운다.
     role_granted_by = db.Column(db.String(80), nullable=True)
+    # 감사(audit): 언제·왜 이 등급이 됐는가.
+    role_granted_at = db.Column(db.DateTime, nullable=True)
+    role_reason = db.Column(db.String(200), nullable=True)
+
+    # ── 계정 잠금(account lockout) — 브루트포스 대응 ──
+    # 로그인 실패가 임계를 넘으면 n8n(SOAR)이 잠근다. 잠긴 계정은 비번이 맞아도 423.
+    is_locked = db.Column(db.Boolean, nullable=False, default=False, server_default='0')
+    locked_at = db.Column(db.DateTime, nullable=True)
+    lock_reason = db.Column(db.String(200), nullable=True)
+    # 표시용 누적 실패 횟수(로그인 성공 시 0으로 초기화).
+    failed_logins = db.Column(db.Integer, nullable=False, default=0, server_default='0')
 
     def to_dict(self):
         return {
@@ -112,7 +147,15 @@ class User(db.Model):
             "username": self.username,
             "role": self.role,
             "role_name": ROLE_NAMES.get(self.role, '알수없음'),
+            # 강사님 저장소와 같은 'user'/'gold'/'admin' 표기도 함께 준다.
+            "role_key": ROLE_KEYS.get(self.role, 'unknown'),
             "role_granted_by": self.role_granted_by,
+            "role_granted_at": self.role_granted_at.isoformat() if self.role_granted_at else None,
+            "role_reason": self.role_reason,
+            "is_locked": self.is_locked,
+            "locked_at": self.locked_at.isoformat() if self.locked_at else None,
+            "lock_reason": self.lock_reason,
+            "failed_logins": self.failed_logins,
         }
 
 class Post(db.Model):
@@ -132,6 +175,13 @@ class SecurityEvent(db.Model):
     decision = db.Column(db.String(10), nullable=False)   # 'allow' | 'deny'
     severity = db.Column(db.String(10))                   # 'Low' | 'Medium' | 'High'
     reason = db.Column(db.String(255))
+    # 아래는 강사님 저장소(_7_board_test)의 security_events 와 필드를 맞춘 것.
+    fail_count = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    users = db.Column(db.String(255))        # 시도된 계정들
+    last_seen = db.Column(db.String(32))     # 마지막 시도 시각(보낸 쪽 표기 그대로)
+    window_min = db.Column(db.Integer)       # 집계 구간(분)
+    source = db.Column(db.String(50), default='login_guard')   # 어느 탐지기가 보냈나
+    generated_at = db.Column(db.String(32))  # 보낸 쪽이 만든 시각
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
     def to_dict(self):
@@ -142,7 +192,45 @@ class SecurityEvent(db.Model):
             "decision": self.decision,
             "severity": self.severity,
             "reason": self.reason,
+            "fail_count": self.fail_count,
+            "users": self.users,
+            "last_seen": self.last_seen,
+            "window_min": self.window_min,
+            "source": self.source,
+            "generated_at": self.generated_at,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Incident(db.Model):
+    """보안 인시던트(사고) 티켓 — 탐지·대응 결과를 한 건의 추적 단위로 남긴다.
+
+    같은 출발지(src_ip)의 '열린' 티켓은 하나만 두고(중복 방지), 이벤트가 쌓이면
+    요약을 갱신한다. 실무의 티켓(Jira/ServiceNow) 축소판 — 감사·인계에 쓴다.
+    """
+    __tablename__ = 'cafe_incidents'
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    src_ip = db.Column(db.String(45), index=True)
+    severity = db.Column(db.String(10), default='Medium')          # Low|Medium|High|Critical
+    status = db.Column(db.String(12), default='open', index=True)  # open|closed
+    summary = db.Column(db.Text)            # 자동 취합된, 사람이 읽는 요약(타임라인·조치)
+    event_count = db.Column(db.Integer, default=0)
+    actions = db.Column(db.String(255))     # 취해진 조치 요약
+    student = db.Column(db.String(50))
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+    closed_at = db.Column(db.DateTime)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "title": self.title, "src_ip": self.src_ip,
+            "severity": self.severity, "status": self.status,
+            "summary": self.summary, "event_count": self.event_count,
+            "actions": self.actions, "student": self.student,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "closed_at": self.closed_at.isoformat() if self.closed_at else None,
         }
 
 
@@ -167,25 +255,49 @@ class BlockedIP(db.Model):
         }
 
 
-def ensure_role_granted_by_column():
-    """이미 만들어져 있는 cafe_users 에 role_granted_by 컬럼을 채워 넣는다.
+# 기존 표에 나중에 추가된 컬럼들 — {표 이름: {컬럼 이름: ALTER 문}}
+_ADDED_COLUMNS = {
+    'cafe_users': {
+        'role_granted_by': "ALTER TABLE cafe_users ADD COLUMN role_granted_by VARCHAR(80) NULL",
+        'role_granted_at': "ALTER TABLE cafe_users ADD COLUMN role_granted_at DATETIME NULL",
+        'role_reason': "ALTER TABLE cafe_users ADD COLUMN role_reason VARCHAR(200) NULL",
+        'is_locked': "ALTER TABLE cafe_users ADD COLUMN is_locked BOOLEAN NOT NULL DEFAULT 0",
+        'locked_at': "ALTER TABLE cafe_users ADD COLUMN locked_at DATETIME NULL",
+        'lock_reason': "ALTER TABLE cafe_users ADD COLUMN lock_reason VARCHAR(200) NULL",
+        'failed_logins': "ALTER TABLE cafe_users ADD COLUMN failed_logins INT NOT NULL DEFAULT 0",
+    },
+    'security_events': {
+        'fail_count': "ALTER TABLE security_events ADD COLUMN fail_count INT NOT NULL DEFAULT 0",
+        'users': "ALTER TABLE security_events ADD COLUMN users VARCHAR(255) NULL",
+        'last_seen': "ALTER TABLE security_events ADD COLUMN last_seen VARCHAR(32) NULL",
+        'window_min': "ALTER TABLE security_events ADD COLUMN window_min INT NULL",
+        'source': "ALTER TABLE security_events ADD COLUMN source VARCHAR(50) NULL",
+        'generated_at': "ALTER TABLE security_events ADD COLUMN generated_at VARCHAR(32) NULL",
+    },
+}
 
-    db.create_all() 은 '없는 테이블'만 만들고 기존 테이블에 컬럼을 추가하지는 않는다.
-    이 실습은 마이그레이션 도구(alembic)를 쓰지 않으므로, 예전 스키마로 만들어진
-    테이블을 쓰던 사람도 앱만 다시 켜면 되도록 여기서 한 번 확인하고 붙인다.
-    컬럼이 이미 있으면 아무 것도 하지 않는다.
+
+def ensure_added_columns():
+    """이미 만들어져 있는 표에 나중에 생긴 컬럼을 채워 넣는다(가벼운 자동 마이그레이션).
+
+    db.create_all() 은 '없는 표'만 만들고 기존 표는 손대지 않는다. 이 실습은
+    마이그레이션 도구(alembic)를 쓰지 않으므로, 예전 스키마로 만들어진 표를 쓰던
+    사람도 앱만 다시 켜면 되도록 여기서 컬럼 유무를 보고 없을 때만 붙인다.
     """
-    columns = {c['name'] for c in db.inspect(db.engine).get_columns('cafe_users')}
-    if 'role_granted_by' in columns:
-        return
-    db.session.execute(db.text('ALTER TABLE cafe_users ADD COLUMN role_granted_by VARCHAR(80) NULL'))
-    db.session.commit()
-    print('[마이그레이션] cafe_users 에 role_granted_by 컬럼을 추가했습니다.')
+    inspector = db.inspect(db.engine)
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {c['name'] for c in inspector.get_columns(table)}
+        for name, ddl in columns.items():
+            if name in existing:
+                continue
+            db.session.execute(db.text(ddl))
+            db.session.commit()
+            print(f'[마이그레이션] {table} 에 {name} 컬럼을 추가했습니다.')
 
 
 with app.app_context():
-    db.create_all()   # cafe_blocked_ips 처럼 없는 표는 여기서 새로 만들어진다.
-    ensure_role_granted_by_column()
+    db.create_all()   # cafe_incidents 처럼 없는 표는 여기서 새로 만들어진다.
+    ensure_added_columns()
 
 
 def _client_ip():
@@ -259,8 +371,22 @@ def admin_block_ip():
         return jsonify({"msg": "이미 차단된 IP 입니다.", "ip": ip, "blocked": True, "changed": False}), 200
 
     db.session.add(BlockedIP(ip=ip, reason=(data.get('reason') or f'관리자 차단 by {actor}')[:200], blocked_by=actor))
+    # 감사기록: 대시보드(/security)에서도 보이도록 security_events 에 남긴다.
+    event = SecurityEvent(
+        student=(data.get('student') or actor)[:80],
+        src_ip=ip,
+        fail_count=int(data.get('fail_count') or 0),
+        decision='deny',
+        severity=data.get('severity', 'High'),
+        reason=(data.get('reason') or f'IP 실차단: {ip}')[:255],
+        users='',
+        source=data.get('source', 'ip-guard'),
+        generated_at=data.get('generated_at'),
+    )
+    db.session.add(event)
     db.session.commit()
-    return jsonify({"msg": "IP 차단 완료", "ip": ip, "blocked": True, "changed": True, "blocked_by": actor}), 200
+    return jsonify({"msg": "IP 차단 완료", "ip": ip, "blocked": True, "changed": True,
+                    "event_id": event.id, "blocked_by": actor}), 200
 
 
 @app.route('/api/admin/unblock', methods=['POST'])
@@ -292,31 +418,240 @@ def admin_list_blocked():
     return jsonify({"count": len(rows), "blocked": [r.to_dict() for r in rows]}), 200
 
 
+# ----------------- 계정 잠금(account lockout) -----------------
+@app.route('/api/admin/lock', methods=['POST'])
+def admin_lock_account():
+    """계정 잠금(브루트포스 대응) → is_locked=True. n8n 이 호출한다.
+    body: {username, reason, student, src_ip, fail_count, severity}
+    잠금이 실제로 일어나면 security_events 에 감사기록(source='login-guard')을 남긴다."""
+    admin_user, err = _require_admin()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    if not username:
+        return jsonify({"msg": "username 은 필수입니다."}), 400
+
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({"msg": f"없는 사용자: {username}"}), 404
+
+    actor = admin_user.username if admin_user else 'apikey'
+    if user.is_locked:
+        return jsonify({"msg": "이미 잠긴 계정", "username": username,
+                        "locked": True, "changed": False}), 200
+
+    user.is_locked = True
+    user.locked_at = datetime.now()
+    user.lock_reason = (data.get('reason') or f'브루트포스 자동 잠금 by {actor}')[:200]
+    event = SecurityEvent(
+        student=(data.get('student') or actor)[:80],
+        src_ip=data.get('src_ip') or '0.0.0.0',
+        fail_count=int(data.get('fail_count') or 0),
+        decision='deny',
+        severity=data.get('severity', 'High'),
+        reason=(data.get('reason') or f'계정 잠금: {username} (브루트포스)')[:255],
+        users=username,
+        source=data.get('source', 'login-guard'),
+        generated_at=data.get('generated_at'),
+    )
+    db.session.add(event)
+    db.session.commit()
+    return jsonify({"msg": "계정 잠금 완료", "username": username, "locked": True,
+                    "changed": True, "event_id": event.id, "locked_by": actor}), 200
+
+
+@app.route('/api/admin/unlock', methods=['POST'])
+def admin_unlock_account():
+    """계정 잠금 해제 → is_locked=False + 실패 카운트 초기화. body: {username}"""
+    admin_user, err = _require_admin()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    if not username:
+        return jsonify({"msg": "username 은 필수입니다."}), 400
+
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({"msg": f"없는 사용자: {username}"}), 404
+
+    user.is_locked = False
+    user.failed_logins = 0
+    user.lock_reason = None
+    db.session.commit()
+    return jsonify({"msg": "잠금 해제 완료", "username": username, "locked": False,
+                    "unlocked_by": admin_user.username if admin_user else 'apikey'}), 200
+
+
+# ----------------- 인시던트(보안 사고) 티켓 -----------------
+_SEVERITY_RANK = {'Low': 1, 'Medium': 2, 'High': 3, 'Critical': 4}
+
+
+def _build_incident_summary(src_ip, events):
+    """security_events 를 사람이 읽는 인시던트 요약(집계 + 타임라인)으로 취합한다."""
+    by_source, actions = {}, set()
+    worst = 'Low'
+    lines = []
+    for e in events:
+        by_source[e.source] = by_source.get(e.source, 0) + 1
+        if e.decision:
+            actions.add(e.decision)
+        if _SEVERITY_RANK.get(e.severity, 1) > _SEVERITY_RANK.get(worst, 1):
+            worst = e.severity
+        when = (e.created_at.strftime('%Y-%m-%d %H:%M:%S') if e.created_at
+                else (e.generated_at or '?'))
+        lines.append(f"- {when} [{e.severity}/{e.source}] {e.reason or ''} (users={e.users or '-'})")
+
+    first = events[-1].created_at if events and events[-1].created_at else None
+    last = events[0].created_at if events and events[0].created_at else None
+    src_summary = ', '.join(f'{k}×{v}' for k, v in sorted(by_source.items(), key=lambda kv: str(kv[0])))
+    action_text = ', '.join(sorted(actions)) or '없음'
+    summary = (
+        f"[인시던트 요약] 출발지 {src_ip}\n"
+        f"- 관련 이벤트: {len(events)}건 ({src_summary})\n"
+        f"- 최초/최종: {first} ~ {last}\n"
+        f"- 취해진 조치: {action_text}\n"
+        f"- 최고 심각도: {worst}\n"
+        f"[타임라인]\n" + "\n".join(lines[:20])
+    )
+    return summary, worst, action_text, len(events)
+
+
+@app.route('/api/admin/incident', methods=['POST'])
+def admin_create_incident():
+    """인시던트 티켓 생성/갱신. body: {src_ip, title?, severity?, student?, hours?}
+
+    같은 src_ip 의 '열린' 티켓이 있으면 갱신하고(중복 방지), 없으면 새로 만든다.
+    요약은 최근 hours(기본 24)시간의 security_events 를 자동으로 취합한다."""
+    admin_user, err = _require_admin()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    src_ip = (data.get('src_ip') or data.get('ip') or '').strip()
+    if not src_ip:
+        return jsonify({"msg": "src_ip 는 필수입니다."}), 400
+
+    actor = admin_user.username if admin_user else 'apikey'
+    hours = int(data.get('hours') or 24)
+    since = datetime.now() - timedelta(hours=hours)
+    events = (SecurityEvent.query
+              .filter(SecurityEvent.src_ip == src_ip, SecurityEvent.created_at >= since)
+              .order_by(SecurityEvent.created_at.desc()).all())
+    summary, worst, actions, count = _build_incident_summary(src_ip, events)
+
+    incident = Incident.query.filter_by(src_ip=src_ip, status='open').first()
+    created = incident is None
+    if created:
+        incident = Incident(src_ip=src_ip, status='open')
+        db.session.add(incident)
+
+    incident.title = (data.get('title') or f'보안 인시던트: {src_ip} ({count}건)')[:200]
+    incident.severity = data.get('severity') or worst
+    incident.summary = summary
+    incident.event_count = count
+    incident.actions = actions[:255]
+    incident.student = (data.get('student') or actor)[:50]
+    db.session.commit()
+
+    return jsonify({"msg": "인시던트 생성" if created else "인시던트 갱신",
+                    "created": created,
+                    "incident": incident.to_dict()}), (201 if created else 200)
+
+
+@app.route('/api/admin/incidents', methods=['GET'])
+def admin_list_incidents():
+    """인시던트 목록. ?status=open|closed 로 거를 수 있다."""
+    _admin_user, err = _require_admin()
+    if err:
+        return err
+
+    status = request.args.get('status')
+    query = Incident.query
+    if status in ('open', 'closed'):
+        query = query.filter_by(status=status)
+    rows = query.order_by(Incident.updated_at.desc()).all()
+    return jsonify({"count": len(rows), "incidents": [r.to_dict() for r in rows]}), 200
+
+
+@app.route('/api/admin/incident/close', methods=['POST'])
+def admin_close_incident():
+    """인시던트 종료(status=closed). body: {id}"""
+    _admin_user, err = _require_admin()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    try:
+        incident_id = int(data.get('id') or 0)
+    except (TypeError, ValueError):
+        return jsonify({"msg": "id 가 올바르지 않습니다."}), 400
+
+    incident = db.session.get(Incident, incident_id)
+    if not incident:
+        return jsonify({"msg": "없는 인시던트"}), 404
+
+    incident.status = 'closed'
+    incident.closed_at = datetime.now()
+    db.session.commit()
+    return jsonify({"msg": "인시던트 종료", "incident": incident.to_dict()}), 200
+
+
+@app.route('/api/admin/violations', methods=['GET'])
+def admin_list_violations():
+    """정책 위반(허용목록 밖 관리자) 목록 — 회수봇이 참고용으로 쓸 수 있다.
+    ?allowlist=admin,instructor 로 기준을 넘기면 .env 값보다 우선한다."""
+    _admin_user, err = _require_admin()
+    if err:
+        return err
+
+    param = request.args.get('allowlist')
+    allow = ([u.strip() for u in param.split(',') if u.strip()] if param
+             else ADMIN_ALLOWLIST)
+    admins = User.query.filter_by(role=ROLE_ADMIN).all()
+    bad = [u for u in admins if u.username not in allow]
+    return jsonify({
+        "allowlist": allow,
+        "count": len(bad),
+        "violations": [u.to_dict() for u in bad],
+    }), 200
+
+
+# 골드 전용 게시글 카테고리 (/api/gold/posts 가 이 값으로 거른다)
+GOLD_CATEGORY = '골드'
+
+
 # 같은 IP 의 연속 로그인 실패 횟수. 프로세스 메모리에만 두는 카운터라 서버를
 # 재시작하면 초기화된다 — 실습 규모에선 충분하고, 실서비스는 Redis 등으로 옮겨야 한다.
 _login_fail_counts = {}
 
 
-def _send_gelf_login_bruteforce(ip, fail_count):
-    """Graylog 로 직통 GELF(UDP) 신고 — privilege_revoke_bot.py 의 send_gelf 와 같은 방식.
-    n8n 과는 완전히 별개 경로라, n8n 이 꺼져 있어도 Graylog 쪽은 그대로 남는다."""
+def send_gelf(short_message, rule, **fields):
+    """Graylog 로 GELF(UDP) 경보를 보낸다 — 실패해도 예외를 올리지 않는다.
+
+    로그인 실패 같은 '앱만 아는 사건'을 SIEM 으로 흘려보내는 통로다.
+    short_message 는 사람이 읽는 요약, rule 은 `_rule` 값(이벤트 필터 키),
+    나머지 키워드 인자는 `_` 접두사가 붙어 커스텀 필드로 들어간다.
+    """
     msg = {
         'version': '1.1', 'host': socket.gethostname(),
-        'short_message': f"login bruteforce: '{ip}' failed {fail_count} times in a row",
-        'level': 4,
-        '_rule': 'login-bruteforce',
-        '_src_ip': ip,
-        '_fail_count': fail_count,
+        'short_message': short_message, 'level': 4, '_rule': rule,
         '_student': STUDENT_NAME,
     }
-    payload = json.dumps(msg).encode()
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for key, value in fields.items():
+        msg['_' + key] = value
     try:
-        s.sendto(payload, (GRAYLOG_HOST, GRAYLOG_PORT))
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.sendto(json.dumps(msg).encode(), (GRAYLOG_HOST, GRAYLOG_PORT))
+        finally:
+            s.close()
     except OSError as e:
-        print(f"[진단] 로그인 실패 신고를 Graylog 로 못 보냈습니다: {e}")
-    finally:
-        s.close()
+        # SIEM 이 꺼져 있어도 로그인 자체는 계속 동작해야 한다.
+        print(f"[진단] Graylog 로 신고를 못 보냈습니다: {e}")
 
 
 def _report_login_bruteforce(ip, fail_count):
@@ -352,7 +687,8 @@ def _report_login_bruteforce(ip, fail_count):
     except requests.RequestException as e:
         print(f"[진단] 로그인 실패 신고를 n8n 으로 못 보냈습니다: {e}")
 
-    _send_gelf_login_bruteforce(ip, fail_count)
+    send_gelf(f"login bruteforce: '{ip}' failed {fail_count} times in a row",
+              rule='login-bruteforce', src_ip=ip, fail_count=fail_count)
 
 
 # ----------------- Auth Endpoints -----------------
@@ -383,8 +719,26 @@ def login():
     password = data.get('password')
 
     user = User.query.filter_by(username=username).first()
+    ip = _client_ip()
+
+    # ① 잠긴 계정은 비밀번호가 맞아도 거부한다(423 Locked).
+    if user and user.is_locked:
+        send_gelf(f"login attempt on LOCKED account '{username}'",
+                  rule='login-bruteforce', username=username, src_ip=ip, locked='1')
+        return jsonify({
+            "msg": "계정이 잠겨 있습니다. 관리자에게 문의하세요.",
+            "locked": True,
+        }), 423
+
+    # ② 인증 실패 → 실패 카운트 증가 + Graylog 신고, 임계 넘으면 IP 자동 차단.
     if not user or not check_password_hash(user.password, password):
-        ip = _client_ip()
+        if user:
+            user.failed_logins = (user.failed_logins or 0) + 1
+            db.session.commit()
+        send_gelf(f"failed login for '{username}' from {ip}",
+                  rule='login-bruteforce', username=username or '(unknown)',
+                  src_ip=ip, count=1)
+
         fail_count = _login_fail_counts.get(ip, 0) + 1
         _login_fail_counts[ip] = fail_count
 
@@ -399,7 +753,11 @@ def login():
 
         return jsonify({"msg": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
 
-    _login_fail_counts.pop(_client_ip(), None)  # 로그인 성공 시 실패 카운터 초기화.
+    # ③ 성공 → 실패 카운터(메모리·DB) 초기화 후 토큰 발급.
+    _login_fail_counts.pop(ip, None)
+    if user.failed_logins:
+        user.failed_logins = 0
+        db.session.commit()
 
     # role 은 토큰 안에도 넣어 두지만(참고용), 실제 인가 검사는 매번 DB 를 다시 조회해서
     # 판단한다 — 관리자가 등급을 바꾸면 재로그인 없이도 바로 반영되게 하기 위해서다.
@@ -412,6 +770,7 @@ def login():
         "username": user.username,
         "role": user.role,
         "role_name": ROLE_NAMES.get(user.role, '알수없음'),
+        "role_key": ROLE_KEYS.get(user.role, 'unknown'),
     }), 200
 
 
@@ -450,6 +809,26 @@ def role_required(min_role):
             return fn(user, *args, **kwargs)
         return wrapper
     return decorator
+
+
+# ----------------- 골드 등급 전용 API -----------------
+@app.route('/api/gold/posts', methods=['GET'])
+@role_required(ROLE_GOLD)
+def gold_posts(current_user):
+    """골드 전용 게시글 목록.
+
+    화면에서 메뉴를 숨기는 것만으로는 막은 게 아니다 — 주소창에 API 를 직접 쳐 보면
+    그대로 열린다. 그래서 서버에서 한 번 더 등급을 검사한다."""
+    rows = (Post.query.filter_by(category=GOLD_CATEGORY)
+            .order_by(Post.id.desc()).limit(20).all())
+    return jsonify({
+        "count": len(rows),
+        "posts": [{
+            "id": p.id, "title": p.title, "content": p.content,
+            "category": p.category,
+            "author": p.author.username if p.author else 'Unknown',
+        } for p in rows],
+    }), 200
 
 
 # ----------------- 등급별 접근 확인용 엔드포인트 -----------------
@@ -593,6 +972,9 @@ def admin_grant_user():
     target.role = new_role
     # 관리자로 올릴 때만 부여자를 남긴다. 회수봇이 '누가 줬는지' 를 신고에 싣는다.
     target.role_granted_by = data.get('granted_by', 'api') if new_role == ROLE_ADMIN else None
+    # 감사(audit): 언제·왜 이 등급이 됐는가.
+    target.role_granted_at = datetime.now()
+    target.role_reason = (data.get('reason') or '')[:200] or None
     db.session.commit()
 
     event = SecurityEvent(
@@ -601,6 +983,9 @@ def admin_grant_user():
         decision='allow',
         severity='Medium',
         reason=data.get('reason') or f"{ROLE_NAMES[new_role]} 등급 부여: {username}",
+        users=username,
+        source=data.get('source', 'privilege-guard'),
+        generated_at=data.get('generated_at'),
     )
     db.session.add(event)
     db.session.commit()
@@ -781,6 +1166,30 @@ def delete_post(id):
 
 
 # ----------------- Security Events (실습과제: 경보 자동화 봇) -----------------
+def _create_security_post(event):
+    """심화: 거부 이벤트를 게시판 '보안' 공지글로 자동 등록한다(작성자 = 시스템 계정).
+
+    AUTO_POST_ON_DENY=1 일 때만 불린다. 봇 계정이 없으면 무작위 비밀번호로 만들어
+    두고(로그인 용도가 아니라 글쓴이 표시용) 그 계정 이름으로 글을 남긴다.
+    """
+    bot = User.query.filter_by(username='soarbot').first()
+    if not bot:
+        bot = User(username='soarbot',
+                   password=generate_password_hash(os.urandom(16).hex()),
+                   role=ROLE_GENERAL)
+        db.session.add(bot)
+        db.session.flush()
+
+    post = Post(
+        title=f'[보안][{event.student}] {event.src_ip} 접근 거부 ({event.severity})',
+        content=(f'{event.reason}\n시도 계정: {event.users}\n'
+                 f'마지막 시도: {event.last_seen}\n수집: {event.generated_at}'),
+        category='보안', author_id=bot.id)
+    db.session.add(post)
+    db.session.flush()
+    return post.id
+
+
 @app.route('/api/security/events', methods=['POST'])
 def create_security_event():
     # n8n 이 호출하는 엔드포인트. 헤더의 API 키로 인증한다 (JWT 로그인과는 별개).
@@ -792,31 +1201,82 @@ def create_security_event():
     src_ip = data.get('src_ip')
     decision = data.get('decision')
 
-    if not student or not src_ip or not decision:
-        return jsonify({"msg": "student, src_ip, decision 은 필수입니다."}), 400
+    if not student or not src_ip or decision not in ('allow', 'deny'):
+        return jsonify({"msg": "student, src_ip, decision(allow|deny) 은 필수입니다."}), 400
 
     event = SecurityEvent(
         student=student,
         src_ip=src_ip,
         decision=decision,
-        severity=data.get('severity'),
+        severity=data.get('severity', 'Low'),
         reason=data.get('reason'),
+        fail_count=int(data.get('fail_count') or 0),
+        users=data.get('users'),
+        last_seen=data.get('last_seen'),
+        window_min=data.get('window_min'),
+        source=data.get('source', 'login_guard'),
+        generated_at=data.get('generated_at'),
     )
     db.session.add(event)
-    db.session.commit()
+    db.session.flush()   # event.id 확보
 
-    return jsonify(event.to_dict()), 201
+    post_id = None
+    if decision == 'deny' and AUTO_POST_ON_DENY:
+        post_id = _create_security_post(event)
+
+    db.session.commit()   # 이벤트 + 공지글을 한 트랜잭션으로 함께 커밋한다.
+
+    result = event.to_dict()
+    result['post_id'] = post_id
+    return jsonify(result), 201
 
 
 @app.route('/api/security/events', methods=['GET'])
 def list_security_events():
-    # 인증 없이 본인 기록만 조회 (student 파라미터 기준)
+    """조회는 키 없이(수업 확인용). ?student= / ?decision= / ?limit= 으로 거른다."""
     student = request.args.get('student')
+    decision = request.args.get('decision')
+    limit = request.args.get('limit', default=20, type=int)
+
     query = SecurityEvent.query
     if student:
         query = query.filter_by(student=student)
-    events = query.order_by(SecurityEvent.created_at.desc()).all()
-    return jsonify([e.to_dict() for e in events])
+    if decision in ('allow', 'deny'):
+        query = query.filter_by(decision=decision)
+
+    events = query.order_by(SecurityEvent.id.desc()).limit(min(limit, 100)).all()
+    return jsonify({"count": len(events), "events": [e.to_dict() for e in events]})
+
+
+@app.route('/api/security/events/summary', methods=['GET'])
+def security_events_summary():
+    """허용/거부 건수 + 거부 실패횟수 상위 IP 5개."""
+    student = request.args.get('student')
+
+    q_decision = db.session.query(SecurityEvent.decision, db.func.count(SecurityEvent.id))
+    q_top = (db.session.query(SecurityEvent.src_ip, db.func.sum(SecurityEvent.fail_count))
+             .filter(SecurityEvent.decision == 'deny'))
+    if student:
+        q_decision = q_decision.filter(SecurityEvent.student == student)
+        q_top = q_top.filter(SecurityEvent.student == student)
+
+    by_decision = dict(q_decision.group_by(SecurityEvent.decision).all())
+    top = (q_top.group_by(SecurityEvent.src_ip)
+           .order_by(db.func.sum(SecurityEvent.fail_count).desc()).limit(5).all())
+
+    return jsonify({
+        "student": student,
+        "by_decision": by_decision,
+        "top_deny_ips": [{"src_ip": ip, "fails": int(n or 0)} for ip, n in top],
+    })
+
+
+@app.route('/api/security/students', methods=['GET'])
+def list_security_students():
+    """대시보드 드롭다운용 — 기록이 있는 학생 목록."""
+    rows = (db.session.query(SecurityEvent.student)
+            .distinct().order_by(SecurityEvent.student).all())
+    return jsonify({"students": [r[0] for r in rows]})
 
 
 @app.route('/security')
