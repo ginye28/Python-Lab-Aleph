@@ -38,6 +38,15 @@ SECURITY_API_KEY = os.environ.get("SECURITY_API_KEY", "dev-only-change-me")
 # 호출할 때 쓰는 키. 따로 안 정해두면 SECURITY_API_KEY 를 같이 쓴다.
 ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", SECURITY_API_KEY)
 
+# ----------------- IP 차단 요구사항 +a) 로그인 실패 자동 차단 -----------------
+# 같은 IP 에서 이만큼 연속으로 로그인 실패하면 즉시 차단하고 기존
+# security-alert-bot(n8n) 경로로 신고한다. alert_sender.py 와 이름을 맞춘다.
+LOGIN_FAIL_THRESHOLD = int(os.environ.get("LOGIN_FAIL_THRESHOLD", "5"))
+SECURITY_WEBHOOK_URL = os.environ.get(
+    "SECURITY_WEBHOOK_URL", "http://localhost:5678/webhook/security-events"
+)
+STUDENT_NAME = os.environ.get("STUDENT_NAME", "본인이름으로_바꾸세요")
+
 
 def _mask(value):
     """진단 로그용 — 값 전체를 찍지 않고 앞뒤 몇 글자·길이만 보여준다."""
@@ -278,6 +287,41 @@ def admin_list_blocked():
     return jsonify({"count": len(rows), "blocked": [r.to_dict() for r in rows]}), 200
 
 
+# 같은 IP 의 연속 로그인 실패 횟수. 프로세스 메모리에만 두는 카운터라 서버를
+# 재시작하면 초기화된다 — 실습 규모에선 충분하고, 실서비스는 Redis 등으로 옮겨야 한다.
+_login_fail_counts = {}
+
+
+def _report_login_bruteforce(ip, fail_count):
+    """연속 실패 임계치를 넘긴 IP 를 즉시 차단하고, 기존 security-alert-bot(n8n)
+    경로로 신고한다. alert_sender.py 와 같은 payload 형태로 보내서, 이미 Publish 된
+    워크플로(판정 → 거부인가? → 슬랙/디스코드/텔레그램 + 게시판 저장)를 그대로 탄다.
+    n8n 이 꺼져 있어도 로그인 응답 자체는 막히지 않도록 실패를 삼킨다.
+    """
+    if not db.session.get(BlockedIP, ip):
+        db.session.add(BlockedIP(
+            ip=ip,
+            reason=f'로그인 {fail_count}회 연속 실패로 자동 차단',
+            blocked_by='system',
+        ))
+        db.session.commit()
+
+    payload = {
+        "student": STUDENT_NAME,
+        "alerts": [{
+            "ip": ip,
+            # 판정(Code) 노드의 DENY_LEVEL(기본 10) 이상이어야 deny 로 분류된다.
+            "level": 10,
+            "rule": "login-bruteforce",
+            "fail_count": fail_count,
+        }],
+    }
+    try:
+        requests.post(SECURITY_WEBHOOK_URL, json=payload, timeout=5)
+    except requests.RequestException as e:
+        print(f"[진단] 로그인 실패 신고를 n8n 으로 못 보냈습니다: {e}")
+
+
 # ----------------- Auth Endpoints -----------------
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -307,7 +351,22 @@ def login():
 
     user = User.query.filter_by(username=username).first()
     if not user or not check_password_hash(user.password, password):
+        ip = _client_ip()
+        fail_count = _login_fail_counts.get(ip, 0) + 1
+        _login_fail_counts[ip] = fail_count
+
+        if fail_count >= LOGIN_FAIL_THRESHOLD:
+            _login_fail_counts.pop(ip, None)  # 차단됐으니 이 IP 카운터는 정리한다.
+            _report_login_bruteforce(ip, fail_count)
+            return jsonify({
+                "msg": f"로그인 {fail_count}회 연속 실패로 IP 가 차단되었습니다.",
+                "ip": ip,
+                "blocked": True,
+            }), 403
+
         return jsonify({"msg": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
+
+    _login_fail_counts.pop(_client_ip(), None)  # 로그인 성공 시 실패 카운터 초기화.
 
     # role 은 토큰 안에도 넣어 두지만(참고용), 실제 인가 검사는 매번 DB 를 다시 조회해서
     # 판단한다 — 관리자가 등급을 바꾸면 재로그인 없이도 바로 반영되게 하기 위해서다.
