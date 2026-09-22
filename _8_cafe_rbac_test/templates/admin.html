@@ -117,6 +117,19 @@
                         <tbody>${rows}</tbody>
                     </table>
                 </div>
+
+                <div class="mt-8">
+                    <h3 class="text-md font-bold text-gray-700 mb-1">⛔ 차단된 IP 관리</h3>
+                    <p class="text-xs text-gray-400 mb-3">여기 등록된 IP 는 관리자 페이지를 제외한 모든 요청이 즉시 403 으로 거부됩니다.</p>
+                    <div class="flex gap-2 mb-3">
+                        <input id="block-ip-input" type="text" placeholder="차단할 IP (예: 127.0.0.1)"
+                            class="border border-gray-300 rounded px-3 py-2 text-sm flex-1">
+                        <input id="block-reason-input" type="text" placeholder="사유(선택)"
+                            class="border border-gray-300 rounded px-3 py-2 text-sm flex-1">
+                        <button id="block-ip-btn" class="text-sm bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700">차단</button>
+                    </div>
+                    <div id="blocked-ip-table" class="bg-white rounded-xl shadow-sm overflow-hidden"></div>
+                </div>
             `;
 
             document.querySelectorAll('.save-btn').forEach(btn => {
@@ -125,6 +138,95 @@
             document.querySelectorAll('.delete-btn').forEach(btn => {
                 btn.addEventListener('click', onDeleteUser);
             });
+            document.getElementById('block-ip-btn').addEventListener('click', onBlockIp);
+            await renderBlockedIps();
+        }
+
+        async function renderBlockedIps() {
+            const token = localStorage.getItem('token');
+            const res = await fetch('/api/admin/blocked', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const box = document.getElementById('blocked-ip-table');
+            if (!res.ok) {
+                box.innerHTML = `<p class="text-sm text-red-500 p-3">차단 목록을 불러오지 못했습니다.</p>`;
+                return;
+            }
+            const { blocked } = await res.json();
+            if (!blocked.length) {
+                box.innerHTML = `<p class="text-sm text-gray-400 p-3">차단된 IP가 없습니다.</p>`;
+                return;
+            }
+            const rows = blocked.map(b => `
+                <tr class="border-b last:border-0" data-ip="${escapeHtml(b.ip)}">
+                    <td class="px-3 py-2 font-mono">${escapeHtml(b.ip)}</td>
+                    <td class="px-3 py-2 text-gray-500">${escapeHtml(b.reason || '-')}</td>
+                    <td class="px-3 py-2 text-gray-400">${escapeHtml(b.blocked_by || '-')}</td>
+                    <td class="px-3 py-2 text-right">
+                        <button class="unblock-btn text-xs bg-gray-200 text-gray-700 px-3 py-1.5 rounded hover:bg-gray-300">해제</button>
+                    </td>
+                </tr>
+            `).join('');
+            box.innerHTML = `
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-100 text-gray-600">
+                        <tr>
+                            <th class="text-left px-3 py-2">IP</th>
+                            <th class="text-left px-3 py-2">사유</th>
+                            <th class="text-left px-3 py-2">차단한 사람</th>
+                            <th class="text-right px-3 py-2">작업</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+            box.querySelectorAll('.unblock-btn').forEach(btn => {
+                btn.addEventListener('click', onUnblockIp);
+            });
+        }
+
+        async function onBlockIp() {
+            const ip = document.getElementById('block-ip-input').value.trim();
+            const reason = document.getElementById('block-reason-input').value.trim();
+            if (!ip) {
+                showAdminMsg('차단할 IP를 입력해주세요.', false);
+                return;
+            }
+            const token = localStorage.getItem('token');
+            const res = await fetch('/api/admin/block', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ ip, reason })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                document.getElementById('block-ip-input').value = '';
+                document.getElementById('block-reason-input').value = '';
+                await renderBlockedIps();
+                showAdminMsg(data.msg, true);
+            } else {
+                showAdminMsg(data.msg || '차단에 실패했습니다.', false);
+            }
+        }
+
+        async function onUnblockIp(e) {
+            const row = e.target.closest('tr');
+            const ip = row.dataset.ip;
+            if (!confirm(`${ip} 차단을 해제하시겠습니까?`)) return;
+
+            const token = localStorage.getItem('token');
+            const res = await fetch('/api/admin/unblock', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ ip })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                await renderBlockedIps();
+                showAdminMsg(data.msg, true);
+            } else {
+                showAdminMsg(data.msg || '해제에 실패했습니다.', false);
+            }
         }
 
         function showAdminMsg(text, ok) {
