@@ -3,3 +3,5 @@ creds.json
 *.creds.json
 *.log
 log.txt
+__pycache__/
+*.pyc
