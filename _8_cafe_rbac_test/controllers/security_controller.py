@@ -5,8 +5,11 @@ from flask import Blueprint, current_app, jsonify, request
 from werkzeug.security import generate_password_hash
 
 from extensions import db
-from models import Post, SecurityEvent, User
+from models import Incident, Post, SecurityEvent, User
 from models.user import ROLE_GENERAL
+
+from .gelf import send_gelf
+from .rbac import client_ip
 
 security_bp = Blueprint('security', __name__)
 
@@ -38,6 +41,13 @@ def _create_security_post(event):
 def create_security_event():
     # n8n 이 호출하는 엔드포인트. 헤더의 API 키로 인증한다 (JWT 로그인과는 별개).
     if request.headers.get('X-API-Key') != current_app.config.get('SECURITY_API_KEY'):
+        # S6 인증 공격 탐지 — 키를 추측해 두드리는 것을 신고한다.
+        # 시도된 키 값 자체는 절대 남기지 않는다(그 자체가 비밀 후보다).
+        try:
+            send_gelf(f"admin api auth failed {request.path[:80]}", rule='admin-auth-fail',
+                      src_ip=client_ip(), path=request.path[:120], code=401)
+        except Exception:
+            pass
         return jsonify({"msg": "인증 실패: X-API-Key 가 없거나 올바르지 않습니다."}), 401
 
     data = request.get_json(silent=True) or {}
@@ -112,6 +122,44 @@ def security_events_summary():
         "student": student,
         "by_decision": by_decision,
         "top_deny_ips": [{"src_ip": ip, "fails": int(n or 0)} for ip, n in top],
+    })
+
+
+@security_bp.route('/api/security/incidents', methods=['GET'])
+def list_security_incidents():
+    """인시던트 티켓 목록 — 조회는 키 없이(대시보드가 쓴다).
+
+    생성/종료는 그대로 관리자 키가 필요한 /api/admin/incident 쪽이다(읽기 전용).
+    ?status=open|closed · ?student= · ?limit= (최대 100)"""
+    status = request.args.get('status')
+    student = request.args.get('student')
+    limit = request.args.get('limit', default=20, type=int)
+
+    query = Incident.query
+    if status in ('open', 'closed'):
+        query = query.filter_by(status=status)
+    if student:
+        query = query.filter_by(student=student)
+
+    rows = query.order_by(Incident.id.desc()).limit(min(limit, 100)).all()
+    return jsonify({"count": len(rows), "incidents": [r.to_dict() for r in rows]})
+
+
+@security_bp.route('/api/security/incidents/summary', methods=['GET'])
+def security_incidents_summary():
+    """상태별 티켓 수 + 열린 티켓의 심각도 분포(대시보드 카드용)."""
+    student = request.args.get('student')
+
+    q_status = db.session.query(Incident.status, db.func.count(Incident.id))
+    q_severity = (db.session.query(Incident.severity, db.func.count(Incident.id))
+                  .filter(Incident.status == 'open'))
+    if student:
+        q_status = q_status.filter(Incident.student == student)
+        q_severity = q_severity.filter(Incident.student == student)
+
+    return jsonify({
+        "by_status": dict(q_status.group_by(Incident.status).all()),
+        "open_by_severity": dict(q_severity.group_by(Incident.severity).all()),
     })
 
 
