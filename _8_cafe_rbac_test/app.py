@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 import json
 import os
+import re
 import socket
 import requests
 from dotenv import load_dotenv
@@ -56,6 +57,12 @@ GRAYLOG_PORT = int(os.environ.get("GRAYLOG_PORT", "12201"))
 ADMIN_ALLOWLIST = [u.strip() for u in os.environ.get("ADMIN_ALLOWLIST", "").split(',') if u.strip()]
 # 거부(deny) 이벤트가 들어오면 게시판에 '보안' 공지글을 자동 등록할지.
 AUTO_POST_ON_DENY = os.environ.get("AUTO_POST_ON_DENY", "0") == "1"
+# 보안 로그 파일(호스트의 Wazuh 에이전트가 읽어 감). 기본: 이 폴더의 logs/security.log.
+# 비우면(SECURITY_LOG_PATH=) 파일 기록을 끈다.
+SECURITY_LOG_PATH = os.environ.get(
+    "SECURITY_LOG_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs', 'security.log'),
+)
 
 
 def _mask(value):
@@ -309,20 +316,57 @@ def _client_ip():
     return request.remote_addr or ''
 
 
+def _is_trusted_automation():
+    """유효한 API 키(보안/관리자)를 제시한 요청인가 — SOAR 봇 판별용.
+
+    키가 설정돼 있지 않으면(빈 값) 어떤 요청도 신뢰하지 않는다(fail-closed)."""
+    key = request.headers.get('X-API-Key', '')
+    if not key:
+        return False
+    valid = {SECURITY_API_KEY or '', ADMIN_API_KEY or ''} - {''}
+    return key in valid
+
+
 @app.before_request
 def block_ip_guard():
     """차단된 IP 실차단(active response) — 미들웨어가 앱에 닿기 전에 403 으로 되돌린다.
 
     - /api/admin/* 는 예외로 둔다. 그래야 관리자(사람 또는 회수봇)가 자기 자신을
       막힌 IP 로 만들어 복구 불능이 되는 상황 없이 계속 차단/해제를 할 수 있다.
+    - ★ 유효한 API 키를 제시한 자동화(SOAR) 요청도 예외다. 브루트포스 대응으로
+      SOAR 가 자기 자신의 IP(예: 127.0.0.1)를 차단하면, 같은 호스트에서 오는 보안
+      봇의 신고·조회 호출까지 403 이 되어 봇이 스스로를 잠그게 된다(자기차단).
+      사람이 아닌 인증된 봇은 차단 대상이 아니다.
     - 매 요청 cafe_blocked_ips 표를 조회한다. 실습 규모에선 충분하고, 실서비스는
       캐시(Redis)나 방화벽(nftables) 계층으로 올려야 한다.
     """
     if request.path.startswith('/api/admin'):
         return None
+    if _is_trusted_automation():
+        return None
     ip = _client_ip()
     if ip and db.session.get(BlockedIP, ip):
+        # S5 지속성 탐지 — 차단됐는데도 계속 두드리는 것을 신고한다.
+        # 403 만 주고 끝내면 '공격이 멈췄는지'를 알 수 없다.
+        try:
+            send_gelf(f"blocked ip retried {request.path[:80]}", rule='blocked-retry',
+                      src_ip=ip, path=request.path[:120], code=403)
+        except Exception:
+            pass
         return jsonify({"msg": "차단된 IP 입니다(관리자에게 문의).", "ip": ip, "blocked": True}), 403
+
+
+@app.after_request
+def web_scan_probe(response):
+    """스캐너(nikto·dirbuster 등)는 없는 경로에 404 를 대량 유발한다.
+    404 를 GELF(rule='web-scan')로 신고 → Graylog src_ip 집계가 '한 IP 404 폭주'를 탐지."""
+    try:
+        if response.status_code == 404 and not request.path.startswith('/api/admin'):
+            send_gelf(f"404 probe {request.path[:80]}", rule='web-scan',
+                      src_ip=_client_ip(), path=request.path[:120], code=404)
+    except Exception:
+        pass
+    return response
 
 
 def _require_admin():
@@ -538,10 +582,20 @@ def admin_create_incident():
     actor = admin_user.username if admin_user else 'apikey'
     hours = int(data.get('hours') or 24)
     since = datetime.now() - timedelta(hours=hours)
+    # 같은 src_ip 의 '마지막으로 종료된 티켓' 이후 사건만 취합한다 — 이미 처리·종료한
+    # 사건을 새 티켓이 다시 흡수하지 않게 하기 위해서다. 같은 초 경계는 포함(>=) 쪽으로:
+    # 새 증거를 놓치는 것보다 한 건 겹치는 편이 안전하다.
+    last_closed = (Incident.query
+                   .filter(Incident.src_ip == src_ip, Incident.status == 'closed',
+                           Incident.closed_at.isnot(None))
+                   .order_by(Incident.closed_at.desc()).first())
+    if last_closed and last_closed.closed_at > since:
+        since = last_closed.closed_at
     events = (SecurityEvent.query
               .filter(SecurityEvent.src_ip == src_ip, SecurityEvent.created_at >= since)
               .order_by(SecurityEvent.created_at.desc()).all())
     summary, worst, actions, count = _build_incident_summary(src_ip, events)
+    severity = data.get('severity') or worst
 
     incident = Incident.query.filter_by(src_ip=src_ip, status='open').first()
     created = incident is None
@@ -550,7 +604,10 @@ def admin_create_incident():
         db.session.add(incident)
 
     incident.title = (data.get('title') or f'보안 인시던트: {src_ip} ({count}건)')[:200]
-    incident.severity = data.get('severity') or worst
+    # 심각도는 '내려가지 않는다': 요청값·취합 최고값·기존 티켓 값 중 가장 높은 것
+    # (Critical 티켓에 나중에 Medium 경보가 합쳐져도 Critical 을 유지해야 한다).
+    incident.severity = max((severity, worst, incident.severity or 'Low'),
+                            key=lambda s: _SEVERITY_RANK.get(s, 0))
     incident.summary = summary
     incident.event_count = count
     incident.actions = actions[:255]
@@ -654,6 +711,39 @@ def send_gelf(short_message, rule, **fields):
         print(f"[진단] Graylog 로 신고를 못 보냈습니다: {e}")
 
 
+_UNSAFE_LOG_CHARS = re.compile(r'[\s\x00-\x1f\x7f]+')   # 공백·개행·제어문자
+
+
+def _clean_seclog_value(value, limit=64):
+    text = _UNSAFE_LOG_CHARS.sub('_', str(value or '-'))
+    return text[:limit] or '-'
+
+
+def write_seclog(event, user, src_ip):
+    """호스트 로그 파일에 보안 이벤트를 한 줄 남긴다 — Wazuh 에이전트가 읽어 간다.
+
+    GELF(send_gelf)는 앱이 Graylog 로 '직접' 보내는 길이고, 이 함수는 호스트에 설치된
+    Wazuh 에이전트가 '읽어 가는' 길이다(센서가 하나 더 붙는다).
+
+    event: login_failed | login_success
+    주의: ① 타임스탬프에 밀리초(.mmm)가 있어야 한다 — 없으면 Wazuh 내장 프리디코더
+    (windows-date-format)가 먼저 잡아가서 커스텀 디코더에 도달하지 못한다(미탐).
+    ② 사용자 입력(username)을 그대로 쓰면 '로그 인젝션'이 되므로 공백·개행·제어문자를
+    '_' 로 바꾸고 길이를 자른다."""
+    if not SECURITY_LOG_PATH:
+        return
+    first_hop = str(src_ip or '').split(',')[0].strip()   # X-Forwarded-For 첫 홉만
+    now = datetime.now()
+    stamp = now.strftime('%Y-%m-%d %H:%M:%S.') + f'{now.microsecond // 1000:03d}'
+    line = f'{stamp} {event} user={_clean_seclog_value(user)} src_ip={_clean_seclog_value(first_hop, 45)}\n'
+    try:
+        os.makedirs(os.path.dirname(SECURITY_LOG_PATH), exist_ok=True)
+        with open(SECURITY_LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(line)
+    except OSError:
+        pass   # 로그 파일 문제로 로그인이 멈추면 안 된다(가용성 우선)
+
+
 def _report_login_bruteforce(ip, fail_count):
     """연속 실패 임계치를 넘긴 IP 를 즉시 차단하고, 두 경로로 신고한다.
 
@@ -725,6 +815,7 @@ def login():
     if user and user.is_locked:
         send_gelf(f"login attempt on LOCKED account '{username}'",
                   rule='login-bruteforce', username=username, src_ip=ip, locked='1')
+        write_seclog('login_failed', username, ip)   # 잠긴 계정 시도도 실패로 기록(Wazuh)
         return jsonify({
             "msg": "계정이 잠겨 있습니다. 관리자에게 문의하세요.",
             "locked": True,
@@ -738,6 +829,7 @@ def login():
         send_gelf(f"failed login for '{username}' from {ip}",
                   rule='login-bruteforce', username=username or '(unknown)',
                   src_ip=ip, count=1)
+        write_seclog('login_failed', username or '(unknown)', ip)   # 호스트 로그 → Wazuh
 
         fail_count = _login_fail_counts.get(ip, 0) + 1
         _login_fail_counts[ip] = fail_count
@@ -758,6 +850,14 @@ def login():
     if user.failed_logins:
         user.failed_logins = 0
         db.session.commit()
+
+    # 성공도 남긴다. 실패만 모으면 "누가 결국 뚫렸는가"를 알 수 없다 — 심야 접속·계정
+    # 탈취·한 계정 다중 IP 같은 탐지는 전부 성공 기록이 있어야 만든다. 남기는 값은
+    # 계정명·등급·출발지 IP 뿐(비밀번호·토큰은 절대 남기지 않는다).
+    send_gelf(f"successful login for '{username}' from {ip}",
+              rule='login-success', username=username, src_ip=ip,
+              role=ROLE_KEYS.get(user.role, ''))
+    write_seclog('login_success', username, ip)
 
     # role 은 토큰 안에도 넣어 두지만(참고용), 실제 인가 검사는 매번 DB 를 다시 조회해서
     # 판단한다 — 관리자가 등급을 바꾸면 재로그인 없이도 바로 반영되게 하기 위해서다.
@@ -819,6 +919,15 @@ def gold_posts(current_user):
 
     화면에서 메뉴를 숨기는 것만으로는 막은 게 아니다 — 주소창에 API 를 직접 쳐 보면
     그대로 열린다. 그래서 서버에서 한 번 더 등급을 검사한다."""
+    # S9 상관 탐지용 — "권한을 올린 뒤 실제로 열람했는가"를 이으려면 열람 사실이 남아야
+    # 한다. 남기는 값은 계정명·등급·출발지뿐(본문은 남기지 않는다 — 로그는 더 넓게 공유된다).
+    try:
+        send_gelf(f"gold area accessed by '{current_user.username}'", rule='gold-access',
+                  username=current_user.username, role=ROLE_KEYS.get(current_user.role, ''),
+                  src_ip=_client_ip())
+    except Exception:
+        pass
+
     rows = (Post.query.filter_by(category=GOLD_CATEGORY)
             .order_by(Post.id.desc()).limit(20).all())
     return jsonify({
