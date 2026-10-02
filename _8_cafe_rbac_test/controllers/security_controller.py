@@ -9,9 +9,33 @@ from models import Incident, Post, SecurityEvent, User
 from models.user import ROLE_GENERAL
 
 from .gelf import send_gelf
+from .pagination import SortError, paginate, severity_rank
 from .rbac import client_ip
 
 security_bp = Blueprint('security', __name__)
+
+# 정렬 허용 컬럼(화이트리스트) — 화면의 표 머리글을 누르면 이 이름이 날아온다.
+# severity 는 글자가 아니라 서열로 정렬한다(pagination.severity_rank 설명 참고).
+_EVENT_SORTS = {
+    'created_at': SecurityEvent.created_at,
+    'decision': SecurityEvent.decision,
+    'severity': severity_rank(SecurityEvent.severity),
+    'fail_count': SecurityEvent.fail_count,
+    'student': SecurityEvent.student,
+    'src_ip': SecurityEvent.src_ip,
+    'id': SecurityEvent.id,
+}
+
+_INCIDENT_SORTS = {
+    'created_at': Incident.created_at,
+    'updated_at': Incident.updated_at,
+    'closed_at': Incident.closed_at,
+    'severity': severity_rank(Incident.severity),
+    'status': Incident.status,
+    'event_count': Incident.event_count,
+    'src_ip': Incident.src_ip,
+    'id': Incident.id,
+}
 
 
 def _create_security_post(event):
@@ -87,19 +111,30 @@ def create_security_event():
 
 @security_bp.route('/api/security/events', methods=['GET'])
 def list_security_events():
-    """조회는 키 없이(수업 확인용). ?student= / ?decision= / ?limit= 으로 거른다."""
+    """조회는 키 없이(수업 확인용).
+
+    필터: ?student= · ?decision=allow|deny · ?severity=Low|Medium|High|Critical
+    페이징: ?page=1 &per_page=20 (최대 100, 예전 ?limit= 도 받는다)
+    정렬:  ?sort=created_at|decision|severity|fail_count|student|src_ip|id
+           &order=asc|desc (기본 created_at desc = 최신 먼저)"""
     student = request.args.get('student')
     decision = request.args.get('decision')
-    limit = request.args.get('limit', default=20, type=int)
+    severity = request.args.get('severity')
 
     query = SecurityEvent.query
     if student:
         query = query.filter_by(student=student)
     if decision in ('allow', 'deny'):
         query = query.filter_by(decision=decision)
+    if severity:
+        query = query.filter_by(severity=severity)
 
-    events = query.order_by(SecurityEvent.id.desc()).limit(min(limit, 100)).all()
-    return jsonify({"count": len(events), "events": [e.to_dict() for e in events]})
+    try:
+        rows, meta = paginate(query, request.args, _EVENT_SORTS, SecurityEvent.id)
+    except SortError as e:
+        return jsonify({"msg": str(e)}), 400
+
+    return jsonify({"count": len(rows), "events": [r.to_dict() for r in rows], **meta})
 
 
 @security_bp.route('/api/security/events/summary', methods=['GET'])
@@ -130,19 +165,29 @@ def list_security_incidents():
     """인시던트 티켓 목록 — 조회는 키 없이(대시보드가 쓴다).
 
     생성/종료는 그대로 관리자 키가 필요한 /api/admin/incident 쪽이다(읽기 전용).
-    ?status=open|closed · ?student= · ?limit= (최대 100)"""
+
+    필터: ?status=open|closed · ?student= · ?severity=Low|Medium|High|Critical
+    페이징: ?page=1 &per_page=20 (최대 100, 예전 ?limit= 도 받는다)
+    정렬:  ?sort=created_at|updated_at|closed_at|severity|status|event_count|src_ip|id
+           &order=asc|desc (기본 created_at desc = 최신 먼저)"""
     status = request.args.get('status')
     student = request.args.get('student')
-    limit = request.args.get('limit', default=20, type=int)
+    severity = request.args.get('severity')
 
     query = Incident.query
     if status in ('open', 'closed'):
         query = query.filter_by(status=status)
     if student:
         query = query.filter_by(student=student)
+    if severity:
+        query = query.filter_by(severity=severity)
 
-    rows = query.order_by(Incident.id.desc()).limit(min(limit, 100)).all()
-    return jsonify({"count": len(rows), "incidents": [r.to_dict() for r in rows]})
+    try:
+        rows, meta = paginate(query, request.args, _INCIDENT_SORTS, Incident.id)
+    except SortError as e:
+        return jsonify({"msg": str(e)}), 400
+
+    return jsonify({"count": len(rows), "incidents": [r.to_dict() for r in rows], **meta})
 
 
 @security_bp.route('/api/security/incidents/summary', methods=['GET'])

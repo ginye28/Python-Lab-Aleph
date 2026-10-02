@@ -69,12 +69,20 @@
                         같은 출발지의 이벤트를 <b>한 사건</b>으로 묶은 기록 — 열린 티켓은 아직 대응이 안 끝난 것
                     </p>
                 </div>
-                <div class="flex items-center gap-4">
+                <div class="flex items-center gap-4 flex-wrap">
                     <div class="text-xs text-gray-500">
                         열림 <b id="inc-open" class="text-red-600">-</b>
                         · 종료 <b id="inc-closed" class="text-gray-500">-</b>
                         <span id="inc-sev" class="text-gray-400"></span>
                     </div>
+                    <select id="inc-severity"
+                        class="border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">심각도 전체</option>
+                        <option value="Critical">Critical</option>
+                        <option value="High">High</option>
+                        <option value="Medium">Medium</option>
+                        <option value="Low">Low</option>
+                    </select>
                     <div class="flex gap-1 text-xs">
                         <button data-status="" class="inc-btn px-2 py-1 rounded bg-indigo-600 text-white">전체</button>
                         <button data-status="open" class="inc-btn px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">열림</button>
@@ -84,17 +92,18 @@
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm whitespace-nowrap">
-                    <thead class="bg-gray-100 text-gray-600">
+                    <!-- data-sort 가 있는 머리글만 눌러서 정렬된다(서버 허용 컬럼과 같다) -->
+                    <thead id="incident-head" class="bg-gray-100 text-gray-600">
                         <tr>
-                            <th class="text-left px-4 py-2 font-medium">#</th>
-                            <th class="text-left px-4 py-2 font-medium">출발지 IP</th>
-                            <th class="text-left px-4 py-2 font-medium">심각도</th>
-                            <th class="text-left px-4 py-2 font-medium">상태</th>
-                            <th class="text-left px-4 py-2 font-medium">관련 이벤트</th>
+                            <th data-sort="id" class="text-left px-4 py-2 font-medium">#</th>
+                            <th data-sort="src_ip" class="text-left px-4 py-2 font-medium">출발지 IP</th>
+                            <th data-sort="severity" class="text-left px-4 py-2 font-medium">심각도</th>
+                            <th data-sort="status" class="text-left px-4 py-2 font-medium">상태</th>
+                            <th data-sort="event_count" class="text-left px-4 py-2 font-medium">관련 이벤트</th>
                             <th class="text-left px-4 py-2 font-medium">조치</th>
                             <th class="text-left px-4 py-2 font-medium">제목</th>
-                            <th class="text-left px-4 py-2 font-medium">생성 시각</th>
-                            <th class="text-left px-4 py-2 font-medium">종료 시각</th>
+                            <th data-sort="created_at" class="text-left px-4 py-2 font-medium">생성 시각</th>
+                            <th data-sort="closed_at" class="text-left px-4 py-2 font-medium">종료 시각</th>
                         </tr>
                     </thead>
                     <tbody id="incident-rows" class="divide-y divide-gray-100">
@@ -102,41 +111,56 @@
                     </tbody>
                 </table>
             </div>
+            <div id="incident-pager"
+                 class="px-4 py-3 border-t flex items-center justify-between flex-wrap gap-2 text-sm"></div>
             <p class="px-4 py-2 text-xs text-gray-400 border-t">
                 티켓 생성·종료는 관리자 API(<code>/api/admin/incident</code>, <code>/incident/close</code>)에서 한다 — 이 화면은 <b>읽기 전용</b>.
             </p>
         </section>
 
-        <!-- 이벤트 표 -->
+        <!-- 최근 이벤트 -->
         <section class="bg-white rounded-xl shadow-sm overflow-hidden">
-            <div class="p-4 flex items-center justify-between">
+            <div class="p-4 flex items-center justify-between flex-wrap gap-3">
                 <h3 class="font-semibold">최근 이벤트</h3>
-                <div class="flex gap-1 text-xs">
-                    <button data-decision="" class="filter-btn px-2 py-1 rounded bg-indigo-600 text-white">전체</button>
-                    <button data-decision="deny" class="filter-btn px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">거부</button>
-                    <button data-decision="allow" class="filter-btn px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">허용</button>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <select id="ev-severity"
+                        class="border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="">심각도 전체</option>
+                        <option value="Critical">Critical</option>
+                        <option value="High">High</option>
+                        <option value="Medium">Medium</option>
+                        <option value="Low">Low</option>
+                    </select>
+                    <div class="flex gap-1 text-xs">
+                        <button data-decision="" class="filter-btn px-2 py-1 rounded bg-indigo-600 text-white">전체</button>
+                        <button data-decision="deny" class="filter-btn px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">거부</button>
+                        <button data-decision="allow" class="filter-btn px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">허용</button>
+                    </div>
                 </div>
             </div>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
-                    <thead class="bg-gray-100 text-gray-600">
+                    <thead id="event-head" class="bg-gray-100 text-gray-600">
                         <tr>
-                            <th class="text-left px-4 py-3 font-semibold">#</th>
-                            <th class="text-left px-4 py-3 font-semibold">시각</th>
-                            <th class="text-left px-4 py-3 font-semibold">student</th>
-                            <th class="text-left px-4 py-3 font-semibold">출발 IP</th>
-                            <th class="text-left px-4 py-3 font-semibold">판정</th>
-                            <th class="text-left px-4 py-3 font-semibold">심각도</th>
+                            <th data-sort="id" class="text-left px-4 py-3 font-semibold">#</th>
+                            <th data-sort="created_at" class="text-left px-4 py-3 font-semibold">시각</th>
+                            <th data-sort="student" class="text-left px-4 py-3 font-semibold">student</th>
+                            <th data-sort="src_ip" class="text-left px-4 py-3 font-semibold">출발 IP</th>
+                            <th data-sort="decision" class="text-left px-4 py-3 font-semibold">판정</th>
+                            <th data-sort="severity" class="text-left px-4 py-3 font-semibold">심각도</th>
+                            <th data-sort="fail_count" class="text-left px-4 py-3 font-semibold">횟수</th>
                             <th class="text-left px-4 py-3 font-semibold">근거</th>
                         </tr>
                     </thead>
                     <tbody id="rows" class="divide-y divide-gray-100">
                         <tr>
-                            <td colspan="7" class="px-4 py-10 text-center text-gray-400">불러오는 중...</td>
+                            <td colspan="8" class="px-4 py-10 text-center text-gray-400">불러오는 중...</td>
                         </tr>
                     </tbody>
                 </table>
             </div>
+            <div id="event-pager"
+                 class="px-4 py-3 border-t flex items-center justify-between flex-wrap gap-2 text-sm"></div>
         </section>
 
         <p class="text-xs text-gray-400 mt-4">
@@ -146,9 +170,16 @@
         </p>
     </main>
 
+    {# 페이저·정렬 머리글 공용 함수 (두 표가 같이 쓴다) #}
+    {% include 'partials/_table_pager.html' %}
+
     <script>
         let currentDecision = '';
         let currentStatus = '';
+
+        // 표마다 '지금 몇 페이지·어떤 컬럼·어느 방향'을 따로 기억한다.
+        const evState = newTableState();     // 최근 이벤트
+        const incState = newTableState();    // 인시던트 티켓
 
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
             c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -170,8 +201,12 @@
             Medium: 'bg-amber-100 text-amber-700',
         }[s] || 'bg-gray-100 text-gray-600');
 
+        function studentValue() {
+            return document.getElementById('student-filter').value;
+        }
+
         function studentParam() {
-            const v = document.getElementById('student-filter').value;
+            const v = studentValue();
             return v ? 'student=' + encodeURIComponent(v) : '';
         }
 
@@ -213,33 +248,46 @@
         }
 
         async function loadEvents() {
-            const parts = [studentParam(), currentDecision ? 'decision=' + currentDecision : '', 'limit=100']
-                .filter(Boolean).join('&');
+            const head = document.getElementById('event-head');
             const rows = document.getElementById('rows');
-            try {
-                const res = await fetch('/api/security/events?' + parts);
-                const data = (await res.json()).events || [];
+            const qs = tableQuery(evState, {
+                student: studentValue(),
+                decision: currentDecision,
+                severity: document.getElementById('ev-severity').value,
+            });
 
-                if (!data.length) {
-                    rows.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-gray-400">기록이 없습니다.</td></tr>';
-                    return;
-                }
+            const res = await fetch('/api/security/events?' + qs);
+            const d = await res.json();
+            paintSortHeaders(head, evState);
 
-                rows.innerHTML = data.map(e => {
-                    const t = e.created_at ? e.created_at.replace('T', ' ').slice(0, 19) : '-';
-                    return '<tr class="hover:bg-gray-50">'
-                        + '<td class="px-4 py-3 text-gray-400">' + e.id + '</td>'
-                        + '<td class="px-4 py-3 whitespace-nowrap text-gray-600">' + t + '</td>'
-                        + '<td class="px-4 py-3 font-medium">' + esc(e.student) + '</td>'
-                        + '<td class="px-4 py-3 font-mono">' + esc(e.src_ip) + '</td>'
-                        + '<td class="px-4 py-3">' + decisionBadge(e.decision) + '</td>'
-                        + '<td class="px-4 py-3">' + badge(esc(e.severity || '-'), sevCls(e.severity)) + '</td>'
-                        + '<td class="px-4 py-3 text-gray-600">' + esc(e.reason || '') + '</td>'
-                        + '</tr>';
-                }).join('');
-            } catch (err) {
-                rows.innerHTML = '<tr><td colspan="7" class="px-4 py-10 text-center text-red-500">불러오지 못했습니다: ' + err + '</td></tr>';
+            if (!res.ok) {   // 허용되지 않은 정렬 컬럼 등 — 조용히 넘기지 않고 보여준다
+                rows.innerHTML = `<tr><td colspan="8" class="px-4 py-10 text-center text-red-500">${esc(d.msg || '조회 실패')}</td></tr>`;
+                document.getElementById('event-pager').innerHTML = '';
+                return;
             }
+            if (!d.events || d.events.length === 0) {
+                rows.innerHTML = '<tr><td colspan="8" class="px-4 py-10 text-center text-gray-400">기록이 없습니다.</td></tr>';
+                renderPager(document.getElementById('event-pager'), d,
+                    (p) => { evState.page = p; loadEvents(); });
+                return;
+            }
+
+            rows.innerHTML = d.events.map(e => {
+                const t = e.created_at ? e.created_at.replace('T', ' ').slice(0, 19) : '-';
+                return '<tr class="hover:bg-gray-50">'
+                    + '<td class="px-4 py-3 text-gray-400">' + e.id + '</td>'
+                    + '<td class="px-4 py-3 whitespace-nowrap text-gray-600">' + t + '</td>'
+                    + '<td class="px-4 py-3 font-medium">' + esc(e.student) + '</td>'
+                    + '<td class="px-4 py-3 font-mono">' + esc(e.src_ip) + '</td>'
+                    + '<td class="px-4 py-3">' + decisionBadge(e.decision) + '</td>'
+                    + '<td class="px-4 py-3">' + badge(esc(e.severity || '-'), sevCls(e.severity)) + '</td>'
+                    + '<td class="px-4 py-3">' + e.fail_count + '</td>'
+                    + '<td class="px-4 py-3 text-gray-600 max-w-xs truncate" title="' + esc(e.reason || '') + '">' + esc(e.reason || '') + '</td>'
+                    + '</tr>';
+            }).join('');
+
+            renderPager(document.getElementById('event-pager'), d,
+                (p) => { evState.page = p; loadEvents(); });
         }
 
         async function loadIncidentSummary() {
@@ -254,34 +302,51 @@
         }
 
         async function loadIncidents() {
-            const parts = [studentParam(), currentStatus ? 'status=' + currentStatus : '', 'limit=50']
-                .filter(Boolean).join('&');
+            const head = document.getElementById('incident-head');
             const tbody = document.getElementById('incident-rows');
-            try {
-                const r = await fetch('/api/security/incidents?' + parts);
-                const d = await r.json();
-                if (!d.incidents || d.incidents.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-center text-gray-400">티켓이 없습니다.</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = d.incidents.map(t => `
-                    <tr class="hover:bg-gray-50">
-                        <td class="px-4 py-2 text-gray-400">${t.id}</td>
-                        <td class="px-4 py-2 font-mono">${esc(t.src_ip)}</td>
-                        <td class="px-4 py-2">${badge(esc(t.severity), sevCls(t.severity))}</td>
-                        <td class="px-4 py-2">${statusBadge(t.status)}</td>
-                        <td class="px-4 py-2">${t.event_count}</td>
-                        <td class="px-4 py-2 text-gray-600">${esc(t.actions)}</td>
-                        <td class="px-4 py-2 text-gray-600 max-w-xs truncate" title="${esc(t.summary)}">${esc(t.title)}</td>
-                        <td class="px-4 py-2 text-gray-400">${esc((t.created_at || '').replace('T', ' ').slice(0, 19))}</td>
-                        <td class="px-4 py-2 text-gray-400">${esc((t.closed_at || '-').replace('T', ' ').slice(0, 19))}</td>
-                    </tr>`).join('');
-            } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-center text-red-500">불러오지 못했습니다: ' + err + '</td></tr>';
+            const qs = tableQuery(incState, {
+                student: studentValue(),
+                status: currentStatus,
+                severity: document.getElementById('inc-severity').value,
+            });
+
+            const r = await fetch('/api/security/incidents?' + qs);
+            const d = await r.json();
+            paintSortHeaders(head, incState);
+
+            if (!r.ok) {
+                tbody.innerHTML = `<tr><td colspan="9" class="px-4 py-6 text-center text-red-500">${esc(d.msg || '조회 실패')}</td></tr>`;
+                document.getElementById('incident-pager').innerHTML = '';
+                return;
             }
+            if (!d.incidents || d.incidents.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="9" class="px-4 py-6 text-center text-gray-400">티켓이 없습니다.</td></tr>';
+                renderPager(document.getElementById('incident-pager'), d,
+                    (p) => { incState.page = p; loadIncidents(); });
+                return;
+            }
+            tbody.innerHTML = d.incidents.map(t => `
+                <tr class="hover:bg-gray-50">
+                    <td class="px-4 py-2 text-gray-400">${t.id}</td>
+                    <td class="px-4 py-2 font-mono">${esc(t.src_ip)}</td>
+                    <td class="px-4 py-2">${badge(esc(t.severity), sevCls(t.severity))}</td>
+                    <td class="px-4 py-2">${statusBadge(t.status)}</td>
+                    <td class="px-4 py-2">${t.event_count}</td>
+                    <td class="px-4 py-2 text-gray-600">${esc(t.actions)}</td>
+                    <td class="px-4 py-2 text-gray-600 max-w-xs truncate" title="${esc(t.summary)}">${esc(t.title)}</td>
+                    <td class="px-4 py-2 text-gray-400">${esc((t.created_at || '').replace('T', ' ').slice(0, 19))}</td>
+                    <td class="px-4 py-2 text-gray-400">${esc((t.closed_at || '-').replace('T', ' ').slice(0, 19))}</td>
+                </tr>`).join('');
+
+            renderPager(document.getElementById('incident-pager'), d,
+                (p) => { incState.page = p; loadIncidents(); });
         }
 
+        /* 필터가 바뀌면 두 표 모두 1페이지로 — 3페이지를 보던 중에 필터를 좁히면
+           그 페이지에는 아무것도 없어 '기록이 없습니다'만 뜬다. */
         function reload() {
+            evState.page = 1;
+            incState.page = 1;
             loadSummary();
             loadEvents();
             loadIncidentSummary();
@@ -291,6 +356,15 @@
         document.getElementById('refresh-btn').addEventListener('click', () => { loadStudents(); reload(); });
         document.getElementById('student-filter').addEventListener('change', reload);
 
+        document.getElementById('ev-severity').addEventListener('change', () => {
+            evState.page = 1;
+            loadEvents();
+        });
+        document.getElementById('inc-severity').addEventListener('change', () => {
+            incState.page = 1;
+            loadIncidents();
+        });
+
         document.querySelectorAll('.filter-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 currentDecision = btn.dataset.decision;
@@ -298,6 +372,7 @@
                     b.className = 'filter-btn px-2 py-1 rounded ' +
                         (b === btn ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200');
                 });
+                evState.page = 1;
                 loadEvents();
             });
         });
@@ -309,9 +384,14 @@
                     b.className = 'inc-btn px-2 py-1 rounded ' +
                         (b === btn ? 'bg-indigo-600 text-white' : 'bg-gray-100 hover:bg-gray-200');
                 });
+                incState.page = 1;
                 loadIncidents();
             });
         });
+
+        // 머리글 클릭 정렬 연결 (표마다 자기 상태 객체를 쓴다)
+        bindSortHeaders(document.getElementById('event-head'), evState, loadEvents);
+        bindSortHeaders(document.getElementById('incident-head'), incState, loadIncidents);
 
         loadStudents();
         reload();

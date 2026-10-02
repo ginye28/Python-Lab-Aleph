@@ -5,3 +5,4 @@ creds.json
 log.txt
 __pycache__/
 *.pyc
+.pytest_cache/

@@ -1,0 +1,102 @@
+{#
+  표 공용 도구 — 페이지 버튼 + 머리글 클릭 정렬.
+
+  인시던트 티켓 표와 최근 이벤트 표가 똑같은 동작을 하므로 함수를 한 곳에 두고
+  두 표가 같이 쓴다. 표마다 '지금 몇 페이지·어떤 컬럼·어느 방향'을 담은 상태
+  객체(state)를 하나씩 들고, 그 객체를 함수에 넘기는 방식이다.
+
+  쓰는 법 (표 하나당):
+    const st = newTableState();                       // {page, per_page, sort, order}
+    bindSortHeaders(theadEl, st, loadFn);             // 머리글 클릭 → 정렬 토글
+    ... fetch('/api/...?' + tableQuery(st, {filter})) // 쿼리스트링 만들기
+    paintSortHeaders(theadEl, st);                    // ▲▼ 표시 갱신
+    renderPager(pagerEl, body, (p) => { st.page = p; loadFn(); });
+
+  정렬 가능한 컬럼은 <th data-sort="created_at"> 처럼 표시한다. data-sort 가 없는
+  머리글(사유·제목 등)은 눌러도 반응하지 않는다 — 서버가 허용하지 않는 컬럼이라
+  눌리면 400 이 되기 때문이다.
+#}
+<script>
+    /* 표 하나의 보기 상태. per_page 20 = 한 페이지에 20건. */
+    function newTableState() {
+        return { page: 1, per_page: 20, sort: 'created_at', order: 'desc' };
+    }
+
+    /* 상태 + 필터를 서버가 아는 쿼리스트링으로. 빈 필터는 아예 보내지 않는다. */
+    function tableQuery(state, filters) {
+        const p = new URLSearchParams();
+        Object.entries(filters || {}).forEach(([k, v]) => { if (v) p.set(k, v); });
+        p.set('page', state.page);
+        p.set('per_page', state.per_page);
+        p.set('sort', state.sort);
+        p.set('order', state.order);
+        return p.toString();
+    }
+
+    /* 머리글 클릭 연결. 같은 컬럼을 다시 누르면 오름↔내림이 뒤집힌다. */
+    function bindSortHeaders(thead, state, reload) {
+        thead.querySelectorAll('th[data-sort]').forEach(th => {
+            th.classList.add('cursor-pointer', 'select-none', 'hover:text-indigo-600');
+            th.title = '클릭하면 이 컬럼으로 정렬(다시 누르면 반대 방향)';
+            th.addEventListener('click', () => {
+                if (state.sort === th.dataset.sort) {
+                    state.order = state.order === 'desc' ? 'asc' : 'desc';
+                } else {
+                    state.sort = th.dataset.sort;
+                    state.order = 'desc';          // 새 컬럼은 내림차순(큰 값·최신)부터
+                }
+                state.page = 1;                  // ★ 정렬이 바뀌면 1페이지로 — 3페이지에
+                                                  //   머물면 엉뚱한 구간이 보인다
+                reload();
+            });
+        });
+    }
+
+    /* 지금 정렬 중인 컬럼에 ▼(내림)·▲(오름), 나머지에 흐린 ↕ 를 붙인다. */
+    function paintSortHeaders(thead, state) {
+        thead.querySelectorAll('th[data-sort]').forEach(th => {
+            // 원래 글자를 data-label 에 보관 — 안 하면 호출마다 화살표가 덧붙는다.
+            if (th.dataset.label === undefined) th.dataset.label = th.textContent.trim();
+            const on = th.dataset.sort === state.sort;
+            th.innerHTML = th.dataset.label + (on
+                ? `<span class="text-indigo-600 font-bold">${state.order === 'desc' ? ' ▼' : ' ▲'}</span>`
+                : '<span class="text-gray-300"> ↕</span>');
+        });
+    }
+
+    /* 페이지 버튼 줄. meta = 서버 응답(page·total·total_pages). go(n) = n 페이지로. */
+    function renderPager(container, meta, go) {
+        const cur = meta.page || 1;
+        const tp = meta.total_pages || 1;
+        const total = meta.total || 0;
+
+        if (!total) { container.innerHTML = ''; return; }   // 기록이 없으면 숨긴다
+
+        const nav = (label, target, on) => on
+            ? `<button data-page="${target}" class="px-2 py-1 rounded border border-gray-200 hover:bg-gray-100">${label}</button>`
+            : `<span class="px-2 py-1 rounded border border-gray-100 text-gray-300">${label}</span>`;
+
+        // 현재 페이지 주변 최대 5개만 — 페이지가 100개여도 버튼이 넘치지 않는다.
+        let from = Math.max(1, cur - 2);
+        const to = Math.min(tp, from + 4);
+        from = Math.max(1, to - 4);
+        let nums = '';
+        for (let p = from; p <= to; p++) {
+            nums += (p === cur)
+                ? `<span class="px-3 py-1 rounded bg-indigo-600 text-white font-medium">${p}</span>`
+                : `<button data-page="${p}" class="px-3 py-1 rounded border border-gray-200 hover:bg-gray-100">${p}</button>`;
+        }
+
+        container.innerHTML = `
+            <div class="text-gray-500">총 <b class="text-gray-700">${total}</b>건
+                · <b class="text-gray-700">${cur}</b> / ${tp} 페이지</div>
+            <div class="flex gap-1 items-center">
+                ${nav('«', 1, cur > 1)}${nav('‹', cur - 1, cur > 1)}
+                ${nums}
+                ${nav('›', cur + 1, cur < tp)}${nav('»', tp, cur < tp)}
+            </div>`;
+
+        container.querySelectorAll('button[data-page]').forEach(b =>
+            b.addEventListener('click', () => go(Number(b.dataset.page))));
+    }
+</script>
