@@ -8,6 +8,9 @@ Flask-SQLAlchemy==3.1.1
 Flask-JWT-Extended==4.6.0
 SQLAlchemy==2.0.52
 PyMySQL==1.1.0
+# MySQL 8+ 의 기본 인증(caching_sha2_password)에 필요 — 없으면 PyMySQL 이
+# "'cryptography' package is required..." RuntimeError 를 낸다.
+cryptography==43.0.3
 python-dotenv==1.2.3
 requests==2.34.2
 Werkzeug==3.0.1
