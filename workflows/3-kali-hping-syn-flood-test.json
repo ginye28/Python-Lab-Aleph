@@ -104,7 +104,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ── 각자 바꿀 값 ──────────────────────────────\nconst STUDENT   = \"lsy\";   // ★ 본인 식별자(제출 증적에 남는다)\nconst THRESHOLD = 10;      // 이 레벨 이상이면 거부(deny)\n// ─────────────────────────────────────────────\n\nfunction toSeverity(level) {\n  if (level >= 10) return \"High\";\n  if (level >= 7)  return \"Medium\";\n  return \"Low\";\n}\n\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json ?? {};\n  const body = j.body ?? j;                    // Webhook 은 본문을 body 아래에 넣는다\n  const student = body.student ?? STUDENT;\n  const alerts = body.alerts ?? body.events ?? (body.ip ? [body] : []);\n  for (const a of alerts) {\n    const level    = Number(a.level ?? 0);\n    const severity = a.severity ?? toSeverity(level);\n    const decision = level >= THRESHOLD ? \"deny\" : \"allow\";\n    out.push({ json: {\n      student,\n      src_ip:     a.ip ?? a.src_ip,\n      level,\n      rule:       a.rule ?? null,\n      fail_count: Number(a.fail_count ?? level),\n      severity,\n      decision,\n      reason:     `level ${level} (rule ${a.rule ?? \"-\"}) → ${decision}`,\n      users:      a.users ?? \"\",\n      last_seen:  a.last_seen ?? null,\n      window_min: body.window_min ?? null,\n      source:     body.source ?? \"login_guard\",\n      generated_at: body.generated_at ?? null,\n    }});\n  }\n}\nreturn out;"
+        "jsCode": "// ── 각자 바꿀 값 ──────────────────────────────\nconst STUDENT = \"jhj\";   // ★ 본인 식별자(제출 증적에 남는다)\nconst THRESHOLD = 10;      // 이 레벨 이상이면 거부(deny)\n// ─────────────────────────────────────────────\n\nfunction toSeverity(level) {\n  if (level >= 10) return \"High\";\n  if (level >= 7)  return \"Medium\";\n  return \"Low\";\n}\n\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json ?? {};\n  const body = j.body ?? j;                    // Webhook 은 본문을 body 아래에 넣는다\n  const student = body.student ?? STUDENT;\n  const alerts = body.alerts ?? body.events ?? (body.ip ? [body] : []);\n  for (const a of alerts) {\n    const level    = Number(a.level ?? 0);\n    const severity = a.severity ?? toSeverity(level);\n    const decision = level >= THRESHOLD ? \"deny\" : \"allow\";\n    out.push({ json: {\n      student,\n      src_ip:     a.ip ?? a.src_ip,\n      level,\n      rule:       a.rule ?? null,\n      fail_count: Number(a.fail_count ?? level),\n      severity,\n      decision,\n      reason:     `level ${level} (rule ${a.rule ?? \"-\"}) → ${decision}`,\n      users:      a.users ?? \"\",\n      last_seen:  a.last_seen ?? null,\n      window_min: body.window_min ?? null,\n      source:     body.source ?? \"login_guard\",\n      generated_at: body.generated_at ?? null,\n    }});\n  }\n}\nreturn out;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -128,7 +128,7 @@
             {
               "id": "d5b7a7a2-156f-4acc-8b3b-fb02abfd9ca1",
               "leftValue": "={{ $json.decision }}",
-              "rightValue": "",
+              "rightValue": "deny",
               "operator": {
                 "type": "string",
                 "operation": "equals",
@@ -161,7 +161,8 @@
             }
           ]
         },
-        "options": {}
+        "options": {},
+        "includeOtherFields": true
       },
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
@@ -184,7 +185,8 @@
             }
           ]
         },
-        "options": {}
+        "options": {},
+        "includeOtherFields": true
       },
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
@@ -209,13 +211,9 @@
           ]
         },
         "sendBody": true,
-        "specifyBody": "={{ JSON.stringify($json) }}",
-        "bodyParameters": {
-          "parameters": [
-            {}
-          ]
-        },
-        "options": {}
+        "specifyBody": "json",
+        "options": {},
+        "jsonBody": "={{ $json }}"
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
